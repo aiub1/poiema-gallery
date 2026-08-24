@@ -143,6 +143,10 @@ vite.config.ts.timestamp-*
 .vite/
 
 .nvmrc
+
+# Instrucoes do Claude Code -- nao versionar
+CLAUDE.md
 claude.md
-.claude
-/claude
+.claude/
+/claude/
+/docs/adr

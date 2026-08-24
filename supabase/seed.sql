@@ -1,0 +1,5 @@
+-- seed.sql — minimal development data.
+-- Applied by `npx supabase db reset` after every migration.
+--
+-- Keep it small: a couple of profiles (one per role), one event, one session.
+-- Never seed real people, real photos, or anything resembling a face embedding.
