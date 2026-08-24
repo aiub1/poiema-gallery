@@ -1,0 +1,25 @@
+{
+  "name": "poiema-gallery",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "node": "24.19.0"
+  },
+
+  "description": "Web portal for searching, download and uploading photos. At a first moment to churchs and cristhian teamples.",
+  "homepage": "https://github.com/aiub1/poiema-gallery#readme",
+  "bugs": {
+    "url": "https://github.com/aiub1/poiema-gallery/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aiub1/poiema-gallery.git"
+  },
+  "license": "ISC",
+  "author": "João Aiub <Aiub1,joaoribeiroaiub@gmail.com>, Rafael Souza <raphsouza_,r.souza1996@live.com>",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
