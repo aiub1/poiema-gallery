@@ -11,10 +11,45 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, edited, synchronize, reopened]
   push:
     branches: [main]
 
 jobs:
+  pr-title:
+    name: Título do PR (Conventional Commits)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            chore
+            ci
+            build
+            revert
+          scopes: |
+            db
+            worker
+            face
+            infra
+            ci
+            docs
+            deps
+            repo
+          requireScope: true
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: "o assunto deve começar com minúscula (CONTRIBUTING.md)"
+
   database:
     name: Banco (Supabase + pgTAP)
     runs-on: ubuntu-latest
