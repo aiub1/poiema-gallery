@@ -1,0 +1,145 @@
+name: CI
+
+# docs/ARQUITETURA.md §10
+#   pull_request → supabase start · db reset · test db · go test · pytest · tofu validate
+#   main         → migrations no remoto · deploy Fly.io · smoke test
+#
+# worker/, services/face/ e infra/ ainda não têm código (fases 2-4 do roadmap,
+# ARQUITETURA.md §13); os steps abaixo checam hashFiles antes de rodar para que
+# o pipeline fique verde desde a Fase 1 e passe a validar cada parte assim que
+# ela ganhar código, sem precisar editar este arquivo de novo.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+jobs:
+  pr-title:
+    name: Título do PR (Conventional Commits)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            chore
+            ci
+            build
+            revert
+          scopes: |
+            db
+            worker
+            face
+            infra
+            ci
+            docs
+            deps
+            repo
+          requireScope: true
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: "o assunto deve começar com minúscula (CONTRIBUTING.md)"
+
+  database:
+    name: Banco (Supabase + pgTAP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: supabase start
+        run: npx supabase start
+      - name: supabase db reset
+        run: npx supabase db reset
+      - name: pgTAP
+        run: npx supabase test db
+
+  worker:
+    name: Worker (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check for go.mod
+        id: check
+        run: echo "exists=$([ -f worker/go.mod ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.exists == 'true'
+        with:
+          go-version-file: worker/go.mod
+      - name: go test
+        if: steps.check.outputs.exists == 'true'
+        working-directory: worker
+        run: go test ./...
+
+  face-service:
+    name: Serviço facial (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check for requirements
+        id: check
+        run: echo "exists=$([ -f services/face/requirements.txt ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.exists == 'true'
+        with:
+          python-version: "3.12"
+      - name: install deps
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/face
+        run: pip install -r requirements.txt
+      - name: pytest
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/face
+        run: pytest
+
+  infra:
+    name: Infra (OpenTofu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check for tofu files
+        id: check
+        run: echo "exists=$(compgen -G 'infra/*.tf' > /dev/null && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: opentofu/setup-opentofu@v1
+        if: steps.check.outputs.exists == 'true'
+      - name: tofu validate
+        if: steps.check.outputs.exists == 'true'
+        working-directory: infra
+        run: |
+          tofu init -backend=false
+          tofu validate
+
+  deploy:
+    name: Deploy (main)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [database, worker, face-service, infra]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check for fly apps
+        id: check
+        run: echo "exists=$(compgen -G 'infra/*.tf' > /dev/null && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: migrations no remoto
+        if: steps.check.outputs.exists == 'true'
+        run: npx supabase db push
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      - name: deploy Fly.io
+        if: steps.check.outputs.exists == 'true'
+        run: echo "TODO — habilitar quando worker/ e services/face/ tiverem Dockerfile (Fase 4, ARQUITETURA.md §13)"
+      - name: smoke test
+        if: steps.check.outputs.exists == 'true'
+        run: echo "TODO — checar /health do worker e do serviço facial após o deploy"

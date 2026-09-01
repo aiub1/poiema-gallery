@@ -609,8 +609,10 @@ tempo de `search_faces`.
 
 ## 13. Roadmap
 
-**Fase 1 — Fundação.** Migrations de `profiles`, `events`, `sessions`. RLS e
-pgTAP. CI verde.
+**Fase 1 — Fundação. ✅ Concluída** (PR #1). Migrations de `profiles`,
+`events`, `sessions`. RLS e pgTAP. CI verde. Além do escopo original da fase,
+o PR também estabeleceu o padrão de commits/branches/PRs do repositório —
+ver `CONTRIBUTING.md` e `docs/adr/0001-padrao-commits-branches-prs.md`.
 
 **Fase 2 — Fotos.** `photos`, `removal_requests`, `jobs`. Bucket R2 via OpenTofu.
 
