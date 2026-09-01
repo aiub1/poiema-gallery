@@ -38,7 +38,7 @@ repository**, is not under version control, cannot be asserted in a test, and
 can be flipped by anyone with console access without leaving a trace in git. A
 security property that no one can verify by reading the repo is not a security
 property. Starting inactive moves the guarantee into code, where pgTAP can hold
-it (`020_profiles_rls.sql`, scenario 17).
+it (`supabase/tests/00_foundation.sql`, provisioning scenario).
 
 The cost is one admin click per legitimate member. For a church of this size
 that is a rounding error against the failure mode it prevents.

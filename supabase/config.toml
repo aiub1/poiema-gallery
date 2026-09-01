@@ -172,7 +172,9 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-enable_signup = true
+# false: signup restrito a convite (CLAUDE.md §5.3, ADR 0003). Reabrir exige
+# reler a seção "Dependência: Supabase Auth signup mode" da ADR 0003 antes.
+enable_signup = false
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts

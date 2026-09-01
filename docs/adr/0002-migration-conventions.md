@@ -20,8 +20,7 @@ the ordinal is the human's.
 
 | # | File | Subject |
 |---|---|---|
-| 0001 | `20260824120000_create_profiles.sql` | `user_role`, `profiles`, role helpers, privileged-column guard |
-| 0002 | `20260824120100_create_profile_provisioning.sql` | `auth.users` → `profiles` trigger |
+| 0001 | `20260830060023_foundation.sql` | `user_role`, `profiles` (role helpers, privileged-column guard, `auth.users` provisioning trigger), `events`, `sessions` |
 
 New migrations are created with `npx supabase migration new <name>`, never by
 hand-typing a timestamp.
@@ -41,16 +40,20 @@ A table arriving without its policies is a bug, not a follow-up.
 ### Ordering constraint inside a single file
 
 The policies on `profiles` call `my_role()`, which itself reads `profiles`.
-Helper functions therefore **cannot** live in an earlier migration than the
-table they read. Required order within `0001`:
+Helper functions therefore **cannot** live before the table they read.
+Required order within `0001` (`20260830060023_foundation.sql`):
 
 ```
-table → helper functions → enable rls → policies → grants
+profiles → helper functions → enable rls → policies → grants → other tables
 ```
 
 This is a property of `profiles` specifically, because it is the table the
-authorization helpers are built on. Later tables (`events`, `sessions`,
-`photos`) only consume the helpers and have no such constraint.
+authorization helpers are built on — the constraint applies to the whole file,
+since `0001` also brings `events` and `sessions` after it. Those two only
+consume the helpers and have no such constraint among themselves; either could
+come first. Later tables outside this file (`photos`, and everything from
+phase 3 on) only consume the helpers too and have no ordering constraint with
+`profiles`.
 
 ## Consequences
 
