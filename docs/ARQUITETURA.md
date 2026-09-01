@@ -1,7 +1,13 @@
 # Arquitetura — galeria-core
 
-Versão 1.0 · Banco, worker e serviço facial. Documento vivo.
-Complementar a `galeria-web/docs/ARQUITETURA.md`.
+Versão 1.1 · Banco, worker e serviço facial. Documento vivo.
+Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
+
+> **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
+> (antes era `auth.uid() is not null`, que deixava perfil desativado enxergando
+> o acervo inteiro); `sessions` ganha `created_by`; `security definer` passa a
+> exigir `pg_temp` no `search_path`; papel e `is_active` viram imutáveis por
+> trigger; perfil deixa de ser excluível.
 
 ---
 
@@ -40,6 +46,9 @@ Complementar a `galeria-web/docs/ARQUITETURA.md`.
 Se as duas flags coexistem, vale a união das regras — e a foto continua **fora
 do índice**, porque `contains_minors` bloqueia a indexação incondicionalmente.
 
+Em todos os casos o acesso pressupõe **perfil ativo**. Desativar um perfil
+retira o acervo inteiro, inclusive as fotos do filho vinculado.
+
 ---
 
 ## 3. Modelo de conteúdo
@@ -71,8 +80,12 @@ create table profiles (
   avatar_key text,
   role       user_role not null default 'member',
   is_active  boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint profiles_full_name_not_blank check (length(btrim(full_name)) > 0)
 );
+create index profiles_role_idx on profiles (role) where is_active;
+-- Perfis são criados por trigger a partir de auth.users, INATIVOS.
+-- Ver docs/adr/0003-profile-provisioning.md.
 
 -- ---------------------------------------------------------------
 create table events (
@@ -85,16 +98,17 @@ create table events (
   created_by  uuid not null references profiles(id) on delete restrict,
   created_at  timestamptz not null default now()
 );
-create index on events (event_date desc);
+create index events_event_date_idx on events (event_date desc);
 
 create table sessions (
   id         uuid primary key default gen_random_uuid(),
   event_id   uuid not null references events(id) on delete cascade,
   name       text not null,
   position   int not null default 0,
+  created_by uuid not null references profiles(id) on delete restrict,
   created_at timestamptz not null default now()
 );
-create index on sessions (event_id, position);
+create index sessions_event_id_position_idx on sessions (event_id, position);
 
 -- ---------------------------------------------------------------
 -- menores: cadastro da secretaria, NÃO são usuários do sistema
@@ -233,31 +247,52 @@ create index on access_logs (user_id, created_at desc);
 
 ### 5.1 Funções auxiliares
 
+Todas `security definer` com `search_path = public, pg_temp`. O `pg_temp` no
+fim é obrigatório: omitido, ele é pesquisado primeiro e uma tabela temporária
+do chamador pode sequestrar nomes dentro da função.
+
 ```sql
 create or replace function my_role()
-returns user_role language sql stable security definer set search_path = public as $$
+returns user_role language sql stable
+security definer set search_path = public, pg_temp as $$
   select role from profiles where id = auth.uid() and is_active;
 $$;
 
+-- Perfil ativo. Base de TODA policy de leitura do schema.
+create or replace function is_member()
+returns boolean language sql stable
+security definer set search_path = public, pg_temp as $$
+  select my_role() is not null;
+$$;
+
 create or replace function is_admin()
-returns boolean language sql stable security definer set search_path = public as $$
-  select my_role() = 'admin';
+returns boolean language sql stable
+security definer set search_path = public, pg_temp as $$
+  select coalesce(my_role() = 'admin', false);
 $$;
 
 create or replace function can_upload()
-returns boolean language sql stable security definer set search_path = public as $$
-  select my_role() in ('admin','uploader');
+returns boolean language sql stable
+security definer set search_path = public, pg_temp as $$
+  select coalesce(my_role() in ('admin','uploader'), false);
 $$;
 
 create or replace function is_guardian_of_photo(p_photo_id uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
+returns boolean language sql stable
+security definer set search_path = public, pg_temp as $$
+  select is_member() and exists (
     select 1 from photo_minors pm
     join guardians g on g.minor_id = pm.minor_id
     where pm.photo_id = p_photo_id and g.guardian_id = auth.uid()
   );
 $$;
 ```
+
+`my_role()` lê `profiles` com RLS contornada, por pertencer ao dono da tabela —
+é isso que impede a policy de leitura de `profiles` de recursar em si mesma.
+**Nunca ligar `force row level security` em `profiles`.**
+
+Execução revogada de `public`, concedida a `authenticated` e `service_role`.
 
 ### 5.2 Policies
 
@@ -278,92 +313,128 @@ alter table jobs             enable row level security;
 alter table access_logs      enable row level security;
 
 -- profiles
+-- Cada um lê o próprio registro mesmo inativo: a UI precisa da linha para
+-- mostrar "conta aguardando ativação" em vez de uma tela vazia.
 create policy "read profiles" on profiles
-  for select using (auth.uid() is not null);
+  for select to authenticated
+  using (id = (select auth.uid()) or (select is_member()));
 create policy "update own profile" on profiles
-  for update using (id = auth.uid())
-  with check (id = auth.uid() and role = my_role() and is_active);
-create policy "admin manages profiles" on profiles
-  for all using (is_admin()) with check (is_admin());
+  for update to authenticated
+  using (id = (select auth.uid()))
+  with check (id = (select auth.uid()));
+create policy "admin inserts profiles" on profiles
+  for insert to authenticated with check ((select is_admin()));
+create policy "admin updates profiles" on profiles
+  for update to authenticated
+  using ((select is_admin())) with check ((select is_admin()));
+-- sem policy de delete, nem para admin
+revoke all on profiles from anon;
+revoke delete on profiles from authenticated;
 
 -- events / sessions
-create policy "read events" on events for select using (auth.uid() is not null);
+create policy "read events" on events
+  for select to authenticated using ((select is_member()));
 create policy "create events" on events
-  for insert with check (can_upload() and created_by = auth.uid());
+  for insert to authenticated
+  with check ((select can_upload()) and created_by = (select auth.uid()));
 create policy "update events" on events
-  for update using (is_admin() or created_by = auth.uid())
-  with check (is_admin() or created_by = auth.uid());
-create policy "delete events" on events for delete using (is_admin());
+  for update to authenticated
+  using ((select is_admin()) or created_by = (select auth.uid()))
+  with check ((select is_admin()) or created_by = (select auth.uid()));
+create policy "delete events" on events
+  for delete to authenticated using ((select is_admin()));
 
-create policy "read sessions" on sessions for select using (auth.uid() is not null);
-create policy "create sessions" on sessions for insert with check (can_upload());
+create policy "read sessions" on sessions
+  for select to authenticated using ((select is_member()));
+create policy "create sessions" on sessions
+  for insert to authenticated
+  with check ((select can_upload()) and created_by = (select auth.uid()));
 create policy "update sessions" on sessions
-  for update using (can_upload()) with check (can_upload());
-create policy "delete sessions" on sessions for delete using (is_admin());
+  for update to authenticated
+  using ((select is_admin()) or created_by = (select auth.uid()))
+  with check ((select is_admin()) or created_by = (select auth.uid()));
+create policy "delete sessions" on sessions
+  for delete to authenticated using ((select is_admin()));
 
 -- minors / guardians: SÓ ADMIN ESCREVE
 create policy "read own minors" on minors
-  for select using (
-    is_admin()
-    or exists (select 1 from guardians g
-                where g.minor_id = minors.id and g.guardian_id = auth.uid())
+  for select to authenticated using (
+    (select is_admin())
+    or ((select is_member()) and exists (
+          select 1 from guardians g
+           where g.minor_id = minors.id and g.guardian_id = (select auth.uid())))
   );
 create policy "admin manages minors" on minors
-  for all using (is_admin()) with check (is_admin());
+  for all to authenticated
+  using ((select is_admin())) with check ((select is_admin()));
 
 create policy "read own guardianship" on guardians
-  for select using (guardian_id = auth.uid() or is_admin());
+  for select to authenticated
+  using ((select is_admin())
+         or ((select is_member()) and guardian_id = (select auth.uid())));
 create policy "admin manages guardianship" on guardians
-  for all using (is_admin()) with check (is_admin());
+  for all to authenticated
+  using ((select is_admin())) with check ((select is_admin()));
 
 create policy "read own minor consent" on minor_consents
-  for select using (guardian_id = auth.uid() or is_admin());
+  for select to authenticated
+  using ((select is_admin())
+         or ((select is_member()) and guardian_id = (select auth.uid())));
 create policy "admin manages minor consent" on minor_consents
-  for all using (is_admin()) with check (is_admin());
+  for all to authenticated
+  using ((select is_admin())) with check ((select is_admin()));
 
 -- photos: regra central de visibilidade
 create policy "read photos" on photos
-  for select using (
+  for select to authenticated using (
     deleted_at is null
     and status <> 'pending_review'
-    and auth.uid() is not null
+    and (select is_member())
     and (
-      is_admin()
-      or uploaded_by = auth.uid()
+      (select is_admin())
+      or uploaded_by = (select auth.uid())
       or (
         coalesce(contains_minors, true) = false
         and (
           not is_private
           or exists (select 1 from photo_grants g
-                      where g.photo_id = photos.id and g.user_id = auth.uid())
-        )
+                      where g.photo_id = photos.id
+                        and g.user_id = (select auth.uid())))
       )
       or (coalesce(contains_minors, true) = true and is_guardian_of_photo(id))
     )
   );
 
 create policy "insert photos" on photos
-  for insert with check (can_upload() and uploaded_by = auth.uid());
+  for insert to authenticated
+  with check ((select can_upload()) and uploaded_by = (select auth.uid()));
 create policy "update own photo" on photos
-  for update using (is_admin() or uploaded_by = auth.uid())
-  with check (is_admin() or uploaded_by = auth.uid());
-create policy "delete photos" on photos for delete using (is_admin());
+  for update to authenticated
+  using ((select is_admin()) or uploaded_by = (select auth.uid()))
+  with check ((select is_admin()) or uploaded_by = (select auth.uid()));
+create policy "delete photos" on photos
+  for delete to authenticated using ((select is_admin()));
 
 -- photo_minors
 create policy "read photo minors" on photo_minors
-  for select using (
-    is_admin()
-    or exists (select 1 from guardians g
-                where g.minor_id = photo_minors.minor_id
-                  and g.guardian_id = auth.uid())
+  for select to authenticated using (
+    (select is_admin())
+    or ((select is_member()) and exists (
+          select 1 from guardians g
+           where g.minor_id = photo_minors.minor_id
+             and g.guardian_id = (select auth.uid())))
   );
 create policy "tag minors" on photo_minors
-  for insert with check (can_upload() and tagged_by = auth.uid());
-create policy "admin untag" on photo_minors for delete using (is_admin());
+  for insert to authenticated
+  with check ((select can_upload()) and tagged_by = (select auth.uid()));
+create policy "admin untag" on photo_minors
+  for delete to authenticated using ((select is_admin()));
 
 -- photo_grants
 create policy "read own grants" on photo_grants
-  for select using (user_id = auth.uid() or is_admin());
+  for select to authenticated
+  using ((select is_admin())
+         or ((select is_member()) and user_id = (select auth.uid())));
 revoke insert, update, delete on photo_grants from anon, authenticated;
 
 -- photo_faces: sem policy de select = ninguém lê
@@ -371,30 +442,46 @@ revoke all on photo_faces from anon, authenticated;
 
 -- face_consents
 create policy "read own consent" on face_consents
-  for select using (user_id = auth.uid() or is_admin());
+  for select to authenticated
+  using ((select is_admin())
+         or ((select is_member()) and user_id = (select auth.uid())));
 create policy "grant own consent" on face_consents
-  for insert with check (user_id = auth.uid());
+  for insert to authenticated
+  with check ((select is_member()) and user_id = (select auth.uid()));
 create policy "revoke own consent" on face_consents
-  for update using (user_id = auth.uid());
+  for update to authenticated
+  using ((select is_member()) and user_id = (select auth.uid()));
 
 -- removal_requests
 create policy "read own requests" on removal_requests
-  for select using (requested_by = auth.uid() or is_admin());
+  for select to authenticated
+  using ((select is_admin())
+         or ((select is_member()) and requested_by = (select auth.uid())));
 create policy "create request" on removal_requests
-  for insert with check (can_upload() and requested_by = auth.uid());
+  for insert to authenticated
+  with check ((select can_upload()) and requested_by = (select auth.uid()));
 create policy "admin reviews" on removal_requests
-  for update using (is_admin()) with check (is_admin());
+  for update to authenticated
+  using ((select is_admin())) with check ((select is_admin()));
 
 -- infra
 revoke all on jobs from anon, authenticated;
-create policy "admin reads logs" on access_logs for select using (is_admin());
+create policy "admin reads logs" on access_logs
+  for select to authenticated using ((select is_admin()));
 ```
 
-### 5.3 Triggers de proteção de menores
+As chamadas vêm embrulhadas em `(select ...)` de propósito: o Postgres as
+transforma em InitPlan e avalia uma vez por query em vez de uma vez por linha.
+Irrelevante em `profiles`, decisivo em `read photos`.
+
+### 5.3 Triggers de proteção
+
+#### Menores
 
 ```sql
 create or replace function forbid_minor_faces()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public, pg_temp as $$
 begin
   if exists (select 1 from photos
               where id = new.photo_id
@@ -410,7 +497,8 @@ create trigger trg_forbid_minor_faces
   for each row execute function forbid_minor_faces();
 
 create or replace function purge_faces_on_minor_flag()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public, pg_temp as $$
 begin
   if new.contains_minors is true
      and coalesce(old.contains_minors, false) is false then
@@ -425,6 +513,65 @@ create trigger trg_purge_faces_on_minor_flag
   for each row execute function purge_faces_on_minor_flag();
 ```
 
+#### Colunas privilegiadas de `profiles`
+
+Congela `role`, `is_active`, `id` e `created_at` para quem não é admin.
+**Security invoker de propósito:** dentro de uma função `security definer`,
+`current_user` resolveria para o dono e a checagem de papel seria letra morta.
+
+```sql
+create or replace function enforce_profile_privileged_columns()
+returns trigger language plpgsql
+set search_path = public, pg_temp as $$
+begin
+  -- bootstrap do primeiro admin e seed rodam como postgres (ADR 0003)
+  if current_user in ('postgres','supabase_admin','service_role') then
+    return new;
+  end if;
+  if is_admin() then
+    return new;
+  end if;
+  if new.role      is distinct from old.role
+     or new.is_active  is distinct from old.is_active
+     or new.id         is distinct from old.id
+     or new.created_at is distinct from old.created_at then
+    raise exception 'coluna privilegiada de perfil so muda por admin'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger trg_profiles_privileged_columns
+  before update on profiles
+  for each row execute function enforce_profile_privileged_columns();
+```
+
+#### Provisionamento
+
+```sql
+create or replace function handle_new_auth_user()
+returns trigger language plpgsql
+security definer set search_path = public, pg_temp as $$
+begin
+  insert into public.profiles (id, full_name, role, is_active)
+  values (
+    new.id,
+    coalesce(nullif(btrim(new.raw_user_meta_data ->> 'full_name'), ''),
+             'Novo membro'),
+    'member',
+    false            -- ⚠️ nasce INATIVO. Ver ADR 0003 antes de mudar.
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+create trigger trg_on_auth_user_created
+  after insert on auth.users
+  for each row execute function handle_new_auth_user();
+```
+
 ### 5.4 Função de busca facial
 
 ```sql
@@ -435,12 +582,14 @@ create or replace function search_faces(
   p_limit     int  default 200
 )
 returns table (photo_id uuid, distance real)
-language plpgsql volatile security definer set search_path = public as $$
+language plpgsql volatile
+security definer set search_path = public, pg_temp as $$
 declare
   v_user uuid := auth.uid();
 begin
-  if v_user is null then
-    raise exception 'não autenticado';
+  -- perfil ativo, não apenas autenticado
+  if not is_member() then
+    raise exception 'perfil inativo ou nao autenticado';
   end if;
 
   if not exists (select 1 from face_consents
@@ -481,6 +630,9 @@ $$;
 revoke all on function search_faces from anon;
 grant execute on function search_faces to authenticated;
 ```
+
+Esta é a função que mais precisa do `pg_temp` no `search_path`: é
+`security definer` **e** cria tabela temporária.
 
 ---
 
@@ -560,7 +712,8 @@ no banco. Exclusão de foto é soft delete; job `delete_objects` limpa o R2 apó
 
 OpenTofu em `infra/`: bucket R2, políticas de acesso, apps do Fly.io, secrets.
 Estado remoto no R2. Supabase permanece no console (provider imaturo) —
-documentar as configurações manuais em `docs/adr/0005-supabase-manual-setup.md`.
+documentar as configurações manuais em `docs/adr/0005-supabase-manual-setup.md`,
+inclusive o modo de signup restrito a convite (ADR 0003).
 
 ---
 
@@ -574,11 +727,19 @@ documentar as configurações manuais em `docs/adr/0005-supabase-manual-setup.md
 
 Cenários pgTAP obrigatórios listados em `CLAUDE.md` seção 8. Não remover.
 
+Além deles, dois guardas estruturais dinâmicos em `010_schema_guards.sql`:
+toda tabela em `public` tem RLS, e toda função `security definer` fixa
+`search_path` com `pg_temp`. Ambos varrem o catálogo, então pegam sozinhos o
+que for criado nas fases seguintes.
+
 CI:
 ```
 pull_request → supabase start · db reset · test db · go test · pytest · tofu validate
 main         → migrations no remoto · deploy Fly.io · smoke test
 ```
+
+Na fase 1 o CI roda só a parte de banco; `go test`, `pytest` e `tofu validate`
+entram com as fases 2 e 4.
 
 ---
 
@@ -603,18 +764,19 @@ tempo de `search_faces`.
 - [ ] "Remover fotos do meu filho" acessível ao responsável
 - [ ] Job de retenção apagando embeddings 1 ano após o evento
 - [ ] Nenhum log com embedding, selfie ou IP em claro
+- [ ] Signup do Supabase Auth restrito a convite (ADR 0003)
 - [ ] Revisão jurídica antes de abrir aos membros
 
 ---
 
 ## 13. Roadmap
 
-**Fase 1 — Fundação. ✅ Concluída** (PR #1). Migrations de `profiles`,
-`events`, `sessions`. RLS e pgTAP. CI verde. Além do escopo original da fase,
-o PR também estabeleceu o padrão de commits/branches/PRs do repositório —
-ver `CONTRIBUTING.md` e `docs/adr/0001-padrao-commits-branches-prs.md`.
+**Fase 1 — Fundação.** Migrations de `profiles`, `events`, `sessions`.
+Funções de papel, provisionamento de perfis e bootstrap do primeiro admin.
+RLS e pgTAP. CI verde.
 
-**Fase 2 — Fotos.** `photos`, `removal_requests`, `jobs`. Bucket R2 via OpenTofu.
+**Fase 2 — Fotos.** `photos`, `removal_requests`, `jobs`, `access_logs`.
+Bucket R2 via OpenTofu.
 
 **Fase 3 — Menores.** `minors`, `guardians`, `minor_consents`, `photo_minors`,
 policies e triggers de proteção. **Antes de existir qualquer embedding.**
@@ -642,3 +804,18 @@ Confira os números atuais — mudam com frequência.
 **A pausa do Supabase é o risco real:** a igreja pode passar dias sem acesso.
 Cron gratuito no GitHub Actions batendo a cada 2 dias resolve. Se o acervo
 crescer, Supabase Pro (US$ 25/mês) resolve pausa, backup e espaço.
+
+---
+
+## 15. Pendências em aberto
+
+Levantadas na revisão da fase 1 e ainda não decididas:
+
+- **`delete` de evento cascateia até `photos`.** Fotos usam soft delete e a
+  limpeza do R2 depende do job `delete_objects`; excluir um evento apaga fotos
+  de verdade e deixa objetos órfãos. Resolver na fase 2: ou `on delete restrict`
+  em `photos.event_id`, ou exclusão de evento também vira soft delete.
+- **`sessions` sem `unique (event_id, name)`.** Duas sessões "Culto da manhã"
+  no mesmo evento são possíveis hoje.
+- **`events.created_by` sem índice.** FK `on delete restrict` sem índice de
+  apoio; irrelevante agora, incomoda quando a tabela crescer.

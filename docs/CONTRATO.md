@@ -1,7 +1,15 @@
 # CONTRATO — galeria-web ↔ galeria-core
 
-Versão 1.0 · **Este arquivo é idêntico nos dois repositórios.**
+Versão 1.1 · **Este arquivo é idêntico nos dois repositórios.**
 Alterou aqui, copie para o outro no mesmo PR.
+
+> ⚠️ O **galeria-web ainda não existe**. Até ele ser criado, este documento vive
+> apenas no core e a regra de cópia acima fica suspensa. Ao criar o outro
+> repositório, a primeira tarefa é copiar este arquivo na íntegra e reativar a
+> obrigação.
+
+> **Mudanças da 1.0 para a 1.1** — perfil provisionado nasce inativo e a web
+> precisa tratar esse estado; geração de tipos dormente; duas invariantes novas.
 
 ---
 
@@ -17,6 +25,7 @@ Alterou aqui, copie para o outro no mesmo PR.
 | Indexação facial | **core** (worker) | web só enfileira o job |
 | Embedding da selfie | **core** (serviço facial) | web faz proxy, não guarda |
 | Limpeza do R2 | **core** (worker) | job `delete_objects` |
+| Ativação de novos perfis | **core** (RLS) + **web** (tela de admin) | perfil nasce inativo |
 
 Regra de ouro: **a web nunca decide quem pode ver o quê.** Ela pergunta ao banco.
 
@@ -33,6 +42,11 @@ npx supabase gen types typescript --local \
 
 O arquivo é commitado no galeria-web. PR que muda schema sem regenerar os tipos
 não passa no CI da web.
+
+**Dormente até o galeria-web existir.** Nenhum PR do core pode ser bloqueado por
+um passo que não tem onde escrever. Ao criar o outro repositório, gerar os tipos
+cobrindo todas as migrations acumuladas e só então ligar a checagem no CI. Ver
+`docs/adr/0002-migration-conventions.md`.
 
 ---
 
@@ -99,6 +113,7 @@ Erros que a web precisa tratar e traduzir para pt-BR:
 
 | Origem | Situação | Mensagem ao usuário |
 |---|---|---|
+| `search_faces` | perfil inativo | conta aguardando liberação pela secretaria |
 | `search_faces` | sem consentimento | pedir consentimento antes |
 | `search_faces` | limite de 20 buscas/hora | tentar mais tarde |
 | `/embed` 422 | nenhum rosto | orientar nova foto |
@@ -106,7 +121,25 @@ Erros que a web precisa tratar e traduzir para pt-BR:
 
 ---
 
-## 6. Chaves do R2
+## 6. Conta autenticada porém inativa
+
+Perfil criado a partir de `auth.users` nasce com `is_active = false` e só é
+liberado por um admin. Consequências para a web:
+
+- O login **funciona**: existe sessão válida e JWT.
+- Toda leitura volta vazia, exceto o próprio registro em `profiles`.
+- A web deve detectar `profiles.is_active = false` logo após o login e mostrar
+  uma tela de "conta aguardando liberação", em vez de uma galeria vazia — que
+  o usuário leria como erro.
+- Nenhuma tela de upload, busca ou evento é oferecida nesse estado.
+- Desativar um perfil existente tem o mesmo efeito, imediatamente.
+
+A tela de administração de membros (ativar, mudar papel) é responsabilidade da
+web; a autorização é do banco. Ver `docs/adr/0003-profile-provisioning.md`.
+
+---
+
+## 7. Chaves do R2
 
 Formato fixo, gerado pela web no momento do upload:
 
@@ -122,7 +155,7 @@ exige PR coordenado nos dois repositórios.
 
 ---
 
-## 7. Invariantes que nenhum dos lados pode quebrar
+## 8. Invariantes que nenhum dos lados pode quebrar
 
 1. Foto com `contains_minors` verdadeiro **nunca** tem embedding.
 2. `contains_minors` nulo significa "não respondido" e a foto não é publicada.
@@ -131,5 +164,7 @@ exige PR coordenado nos dois repositórios.
 5. Somente `admin` executa `DELETE` em fotos.
 6. Vínculo responsável→menor só é criado por `admin`.
 7. `service_role key` nunca chega ao navegador.
+8. Perfil nasce **inativo** e não enxerga nada até ser ativado por um `admin`.
+9. Perfil **nunca é excluído** — nem pelo admin. Desativar é o único caminho.
 
 Quebrar qualquer uma delas é incidente, não bug comum.
