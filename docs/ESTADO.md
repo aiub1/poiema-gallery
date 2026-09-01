@@ -1,15 +1,23 @@
 # Estado do projeto
 
 Última atualização: 2026-09-01 · snapshot, não documento vivo como
-`ARQUITETURA.md`. Reflete o que existe de fato no branch `develop`, não o
-plano — para o plano completo ver `ARQUITETURA.md` §13 (Roadmap).
+`ARQUITETURA.md`. Reflete o que existe de fato no branch `fix/fundacao-rls-
+completa`, ainda não mergeada em `develop` — não o plano — para o plano
+completo ver `ARQUITETURA.md` §13 (Roadmap).
 
 ---
 
 ## Fase atual
 
-**Fase 1 — Fundação: ✅ concluída** (PR #1, mergeado em `develop`).
-Em andamento: nenhuma — próxima fase (2 — Fotos) ainda não começou.
+**Fase 1 — Fundação: em correção**, aguardando merge
+(branch `fix/fundacao-rls-completa`, ainda não em `develop`).
+O PR #1 original (mergeado em `develop`) ficou atrasado em relação a
+`ARQUITETURA.md` v1.1 — esta branch completa `is_member()`, os triggers de
+provisionamento e de colunas privilegiadas, `sessions.created_by`, o
+`revoke` de `anon` e os guardas dinâmicos (detalhes na seção Banco abaixo).
+`develop`, hoje, ainda está na versão do PR #1, sem essas correções.
+Em andamento: aguardando revisão e merge — próxima fase (2 — Fotos) só
+começa depois.
 
 ---
 
@@ -70,6 +78,8 @@ Em andamento: nenhuma — próxima fase (2 — Fotos) ainda não começou.
 - Tabelas `photos`, `removal_requests`, `jobs`, `minors`, `guardians`,
   `minor_consents`, `photo_minors`, `photo_faces`, `face_consents`,
   `photo_grants`, `access_logs` — todas fase 2+.
+- `constraint profiles_full_name_not_blank` (ARQUITETURA.md §4/§15): fora do
+  escopo desta correção, que seguiu só §5.1-5.3.
 - Qualquer código em `worker/` e `services/face/` (só scaffolding de pastas
   e READMEs).
 - `infra/` (OpenTofu) — só README, nenhum `.tf`.

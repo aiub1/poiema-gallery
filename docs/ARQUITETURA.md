@@ -778,9 +778,10 @@ tempo de `search_faces`.
 
 ## 13. Roadmap
 
-**Fase 1 — Fundação.** Migrations de `profiles`, `events`, `sessions`.
-Funções de papel, provisionamento de perfis e bootstrap do primeiro admin.
-RLS e pgTAP. CI verde.
+**Fase 1 — Fundação. ✅ Implementada**, aguardando merge para `develop`
+(branch `fix/fundacao-rls-completa`). Migrations de `profiles`, `events`,
+`sessions`. Funções de papel, provisionamento de perfis e bootstrap do
+primeiro admin. RLS e pgTAP. CI verde.
 
 **Fase 2 — Fotos.** `photos`, `removal_requests`, `jobs`, `access_logs`.
 Bucket R2 via OpenTofu.
@@ -826,3 +827,8 @@ Levantadas na revisão da fase 1 e ainda não decididas:
   no mesmo evento são possíveis hoje.
 - **`events.created_by` sem índice.** FK `on delete restrict` sem índice de
   apoio; irrelevante agora, incomoda quando a tabela crescer.
+- **`profiles_full_name_not_blank` (§4) ainda não está na migration.** A
+  correção de RLS/triggers seguiu só §5.1-5.3, que é onde vive o que os 8
+  itens auditados cobriam; a constraint de `full_name` é schema puro (§4) e
+  ficou de fora por escopo, não por esquecimento. Entra na próxima migration
+  que tocar `profiles`.
