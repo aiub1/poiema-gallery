@@ -356,6 +356,12 @@ create policy "update sessions" on sessions
 create policy "delete sessions" on sessions
   for delete to authenticated using ((select is_admin()));
 
+-- Sistema fechado (CLAUDE.md §1): anon não tem privilégio em tabela alguma.
+-- `to authenticated` já barra o anônimo, mas depende de toda policy futura
+-- ser escrita corretamente; o revoke não depende de ninguém.
+revoke all on events   from anon;
+revoke all on sessions from anon;
+
 -- minors / guardians: SÓ ADMIN ESCREVE
 create policy "read own minors" on minors
   for select to authenticated using (
@@ -727,10 +733,11 @@ inclusive o modo de signup restrito a convite (ADR 0003).
 
 Cenários pgTAP obrigatórios listados em `CLAUDE.md` seção 8. Não remover.
 
-Além deles, dois guardas estruturais dinâmicos em `010_schema_guards.sql`:
-toda tabela em `public` tem RLS, e toda função `security definer` fixa
-`search_path` com `pg_temp`. Ambos varrem o catálogo, então pegam sozinhos o
-que for criado nas fases seguintes.
+Além deles, três guardas estruturais dinâmicos em `010_schema_guards.sql`:
+toda tabela em `public` tem RLS, toda função `security definer` fixa
+`search_path` com `pg_temp`, e nenhuma tabela concede privilégio ao papel
+`anon`. Os três varrem o catálogo, então pegam sozinhos o que for criado nas
+fases seguintes.
 
 CI:
 ```
