@@ -50,3 +50,36 @@ insert into public.events (id, name, slug, event_date, created_by) values
 insert into public.sessions (event_id, name, position, created_by) values
   ('44444444-4444-4444-4444-444444444444', 'Culto da manhã', 0,
    '11111111-1111-1111-1111-111111111111');
+
+-- Fase 2: fotos do uploader seed, uma para cada valor de contains_minors —
+-- cobre os três casos que a policy de leitura trata de forma diferente.
+insert into public.photos (
+  id, event_id, session_id, uploaded_by,
+  storage_key, web_key, thumb_key,
+  contains_minors, status
+) values
+  ('55555555-5555-5555-5555-555555555551', '44444444-4444-4444-4444-444444444444',
+   null, '22222222-2222-2222-2222-222222222222',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555551/original.webp',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555551/web.webp',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555551/thumb.webp',
+   false, 'indexed'),
+  ('55555555-5555-5555-5555-555555555552', '44444444-4444-4444-4444-444444444444',
+   null, '22222222-2222-2222-2222-222222222222',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555552/original.webp',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555552/web.webp',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555552/thumb.webp',
+   true, 'skipped'),
+  ('55555555-5555-5555-5555-555555555553', '44444444-4444-4444-4444-444444444444',
+   null, '22222222-2222-2222-2222-222222222222',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555553/original.webp',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555553/web.webp',
+   'events/44444444-4444-4444-4444-444444444444/photos/55555555-5555-5555-5555-555555555553/thumb.webp',
+   null, 'pending_review');
+
+insert into public.removal_requests (photo_id, requested_by, reason) values
+  ('55555555-5555-5555-5555-555555555551', '22222222-2222-2222-2222-222222222222',
+   'foto duplicada, subida por engano');
+
+insert into public.jobs (type, payload) values
+  ('index_faces', jsonb_build_object('photo_id', '55555555-5555-5555-5555-555555555551'));
