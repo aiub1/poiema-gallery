@@ -778,10 +778,10 @@ tempo de `search_faces`.
 
 ## 13. Roadmap
 
-**Fase 1 — Fundação. ✅ Implementada**, aguardando merge para `develop`
-(branch `fix/fundacao-rls-completa`). Migrations de `profiles`, `events`,
-`sessions`. Funções de papel, provisionamento de perfis e bootstrap do
-primeiro admin. RLS e pgTAP. CI verde.
+**Fase 1 — Fundação. ✅ Concluída** (PR #1 e PR #2, ambos mergeados em
+`develop`). Migrations de `profiles`, `events`, `sessions`. Funções de
+papel, provisionamento de perfis e bootstrap do primeiro admin. RLS e
+pgTAP. CI verde.
 
 **Fase 2 — Fotos.** `photos`, `removal_requests`, `jobs`, `access_logs`.
 Bucket R2 via OpenTofu.
