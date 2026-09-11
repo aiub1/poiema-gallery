@@ -1,6 +1,6 @@
 # Arquitetura — galeria-core
 
-Versão 1.4 · Banco, worker e serviço facial. Documento vivo.
+Versão 1.5 · Banco, worker e serviço facial. Documento vivo.
 Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
 
 > **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
@@ -38,6 +38,20 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
 > implementada sem tabela temporária (CTE que grava e lê no mesmo `WITH`),
 > não com `create temp table ... on commit drop` como o texto original
 > descrevia — motivo em ADR 0009.
+
+> **Mudanças da 1.4 para a 1.5** (fase 4b, serviço — [ADR
+> 0010](adr/0010-face-service-implementation.md)) — `services/face/`
+> implementado (FastAPI + InsightFace `buffalo_l`); `/embed` roda em
+> memória contornando um limite de 1 MB do Starlette que, sem a correção,
+> quebraria a garantia de não-persistência para qualquer selfie de
+> celular (ADR 0010, decisão 2); modelo baixado em **build-time**, nunca
+> em runtime, empacotado com `insightface` instalado via `--no-deps` para
+> não puxar `matplotlib`/`scipy`/`albumentations`/`scikit-learn` (nunca
+> usados — só existem por causa do `MaskRenderer`, decisão 6); `/metrics`
+> exige `X-Service-Token`, mas **nenhum scraper está configurado ainda** —
+> este parágrafo (§11) descreve exportação OTel *push*, que é outra coisa
+> (lacuna registrada em decisão 5). Worker Go consumindo o serviço ainda
+> não entrou — só o serviço Python nesta fase.
 
 ---
 
@@ -888,8 +902,15 @@ de `read photos` ([ADR
 `photo_faces` já existia desde a fase 2 (ADR 0004). **Serviço Python e
 worker Go ainda não entraram** — só banco nesta etapa.
 
-**Fase 4b — Faces, worker e serviço.** Consumo real de `search_faces` e
-`photo_faces` pelo worker Go e pelo serviço facial Python.
+**Fase 4b — Faces, worker e serviço.**
+
+- **Serviço Python: ✅ implementado localmente**, branch
+  `feat/phase4b-face-service` ([PR
+  #8](https://github.com/aiub1/poiema-gallery/pull/8)), aguardando
+  revisão e merge em `develop`. `services/face/` — decisões em [ADR
+  0010](adr/0010-face-service-implementation.md).
+- **Worker Go: não começou.** Consumo real de `search_faces` e
+  `photo_faces` pelo worker Go, chamando o serviço acima.
 
 **Fase 5 — Acabamento.** Retenção automática, métricas, calibração do limiar.
 
