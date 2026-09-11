@@ -55,6 +55,23 @@ tofu plan                  # exige credenciais; não é rodado em CI ainda
 **Não rodar `tofu apply`** sem alinhar com o time — este README documenta
 como provisionar, não é sinal verde para provisionar.
 
+## Verificação pós-apply (obrigatória, antes de qualquer foto)
+
+`tofu validate` não autentica na Cloudflare — confirma sintaxe e tipos do
+`.tf`, nada sobre o estado real do recurso na API. Ausência de campo de
+acesso público no código (seção "Bucket privado" abaixo) é a intenção
+declarada, não a confirmação de que o bucket saiu privado.
+
+Na primeira vez que `tofu apply` rodar de verdade, **antes de qualquer
+foto ser enviada**, conferir manualmente no dashboard Cloudflare → R2 →
+o bucket criado:
+
+- **Public Access** → nenhum domínio customizado anexado;
+- **Public Access** → `r2.dev` subdomain **Disabled**.
+
+Só depois disso o bucket está confirmado privado, não só configurado para
+ser.
+
 ## Credencial S3-compatible do bucket (passo manual, fora do Tofu)
 
 Deliberado: o Tofu cria **só o bucket**, nunca token ou credencial de acesso
