@@ -1,6 +1,6 @@
 # Arquitetura — galeria-core
 
-Versão 1.2 · Banco, worker e serviço facial. Documento vivo.
+Versão 1.3 · Banco, worker e serviço facial. Documento vivo.
 Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
 
 > **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
@@ -17,6 +17,16 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
 > ganha a exigência de que o evento não esteja soft-deletado; `photo_faces`
 > é antecipada da fase 4 para a fase 2, junto dos dois triggers de proteção
 > de menores que dependem dela.
+
+> **Mudanças da 1.2 para a 1.3** (fase 3 — [ADR
+> 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md)) —
+> `minors`, `guardians`, `minor_consents`, `photo_minors` entram, com
+> `is_guardian_of_photo()`; `read photos` ganha o ramo do responsável
+> vinculado (versão intermediária, sem `photo_grants` — ainda fase 4); a
+> nota do §5.2 que descrevia dois estados da policy passa a descrever três;
+> `minor_consents` fica só como registro legal, sem gatear leitura
+> (decisão deliberada, ver ADR 0005); `0005-supabase-manual-setup.md` (§9)
+> passa a `0006`.
 
 ---
 
@@ -504,13 +514,18 @@ As chamadas vêm embrulhadas em `(select ...)` de propósito: o Postgres as
 transforma em InitPlan e avalia uma vez por query em vez de uma vez por linha.
 Irrelevante em `profiles`, decisivo em `read photos`.
 
-**`read photos` na fase 2 é uma versão reduzida da acima.** `guardians`,
-`photo_minors` e `photo_grants` só existem a partir das fases 3/4, então o
-ramo de `is_guardian_of_photo()` e o `exists (select ... from photo_grants
-...)` ainda não existem na migration da fase 2 — até lá, `contains_minors =
-true` e `is_private = true` ficam visíveis só para admin/uploader dono
-(fail closed). A migration da fase 3/4 correspondente troca a policy pela
-versão completa documentada aqui.
+**`read photos` tem três estados, um por fase que a toca** (detalhado em
+[ADR 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md)):
+
+1. **Fase 2** (aplicada): sem `guardians`/`photo_minors`/`photo_grants`.
+   `contains_minors = true` e `is_private = true` ficam visíveis só para
+   admin/uploader dono — fail closed nos dois eixos.
+2. **Fase 3** (aplicada): acrescenta só o ramo `is_guardian_of_photo(id)`.
+   O ramo de `is_private` continua igual ao da fase 2 — ainda fail closed,
+   porque `photo_grants` só chega na fase 4.
+3. **Fase 4** (futura): troca o ramo de `is_private` para incluir
+   `exists (select ... from photo_grants ...)`, alcançando a versão acima,
+   que já é a forma final.
 
 ### 5.3 Triggers de proteção
 
@@ -750,7 +765,7 @@ no banco. Exclusão de foto é soft delete; job `delete_objects` limpa o R2 apó
 
 OpenTofu em `infra/`: bucket R2, políticas de acesso, apps do Fly.io, secrets.
 Estado remoto no R2. Supabase permanece no console (provider imaturo) —
-documentar as configurações manuais em `docs/adr/0005-supabase-manual-setup.md`,
+documentar as configurações manuais em `docs/adr/0006-supabase-manual-setup.md`,
 inclusive o modo de signup restrito a convite (ADR 0003).
 
 ---
@@ -822,8 +837,12 @@ com os dois triggers de proteção de menores ([ADR
 0004](adr/0004-events-soft-delete-and-photo-faces-timing.md)). Bucket R2 via
 OpenTofu **não entrou** — fica para quando `infra/` ganhar código.
 
-**Fase 3 — Menores.** `minors`, `guardians`, `minor_consents`, `photo_minors`,
-policies e triggers de proteção. **Antes de existir qualquer embedding.**
+**Fase 3 — Menores. ✅ Implementada localmente**, branch `feat/phase3-minors`,
+aguardando revisão e merge em `develop`. `minors`, `guardians`,
+`minor_consents`, `photo_minors`, `is_guardian_of_photo()`, `read photos`
+com o ramo do responsável vinculado ([ADR
+0005](adr/0005-read-photos-phase-progression-and-consent-scope.md)).
+**Antes de existir qualquer embedding.**
 
 **Fase 4 — Faces.** `face_consents`, `photo_grants`, `search_faces`, serviço
 Python, worker Go. `photo_faces` já existe desde a fase 2 (ADR 0004).
