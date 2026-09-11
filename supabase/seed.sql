@@ -101,3 +101,14 @@ insert into public.minor_consents (minor_id, guardian_id, terms_version) values
 insert into public.photo_minors (photo_id, minor_id, tagged_by) values
   ('55555555-5555-5555-5555-555555555552', '66666666-6666-6666-6666-666666666661',
    '22222222-2222-2222-2222-222222222222');
+
+-- Fase 4a: consentimento facial ativo do membro seed, e embedding sintético
+-- só na foto que pode ser indexada (contains_minors = false). A foto
+-- '...552' tem contains_minors = true — nenhum embedding entra nela; se o
+-- trigger deixasse, seria bug do trigger (CLAUDE.md §3).
+insert into public.face_consents (user_id, terms_version) values
+  ('33333333-3333-3333-3333-333333333333', '2026-08-v1');
+
+insert into public.photo_faces (photo_id, event_id, embedding) values
+  ('55555555-5555-5555-5555-555555555551', '44444444-4444-4444-4444-444444444444',
+   array_fill(0.1, array[512])::vector);
