@@ -39,10 +39,18 @@ Nada além disso — sem grant em `profiles`, `guardians`, `minors`,
 ele, RLS se aplicaria normalmente e as policies existentes (amarradas a
 `is_member()`/`auth.uid()`, que dependem do contexto JWT do PostgREST)
 devolveriam vazio para uma conexão direta sem esse contexto — o worker não
-conseguiria nem ler as próprias fotos. `bypassrls` resolve isso sem
-depender de policy nenhuma, mantendo os grants como único controle de
-acesso — mais estrito que `service_role`, que também tem `bypassrls`
-implícito mas sobre grants irrestritos.
+conseguiria nem ler as próprias fotos.
+
+**Importante para quem ler esta ADR depois: com `bypassrls`, nenhuma policy
+de RLS é avaliada para `worker_service`, em tabela nenhuma — nem as três
+que ele tem grant, nem qualquer outra.** Não é "RLS mais frouxa" nem "RLS
+como segunda camada atrás dos grants": RLS **não participa** desse caminho
+de jeito nenhum, exatamente como não participa para `service_role`. A
+**única** coisa que limita o que `worker_service` pode ler ou escrever é a
+lista de `grant` acima — três tabelas, duas operações cada. Não há policy
+nenhuma "por trás" contendo um grant mal escrito. Se um `grant` futuro for
+adicionado por engano, não existe uma segunda linha de defesa em RLS para
+esse role — a defesa é escrever o grant certo.
 
 ### Por que não `service_role`
 
@@ -58,27 +66,49 @@ executa por requisição humana, e não deve compartilhar a mesma credencial.
 
 ### O que continua protegendo `photo_faces` mesmo com um bug no worker
 
-Grants restritos cobrem "o worker não pode escrever fora do seu escopo
-declarado", mas a proteção específica contra `contains_minors` é o trigger
-`trg_forbid_minor_faces` (`BEFORE INSERT on photo_faces`) — ele dispara
-para **qualquer** role, `worker_service` incluído, porque é um trigger, não
-uma policy de RLS. RLS (e portanto `bypassrls`) é irrelevante para
-triggers. Essa é a camada que efetivamente conteria um bug de camada 1 (a
-checagem em `internal/jobs/index_faces.go`); o escopo restrito de grants é
-defesa adicional — impede que um bug em *qualquer outro* código do worker
-(não só o handler de `index_faces`) alcance tabelas fora do que
-`ARQUITETURA.md` §6 descreve que o worker faz.
+Duas defesas independentes, nenhuma delas RLS:
 
-## Escopo negado deliberadamente
+- **Grants restritos** dizem *onde* o worker pode escrever — só
+  `photos`/`photo_faces`/`jobs`, nada além disso. É uma checagem de
+  superfície: contém um bug que tentasse gravar em `profiles` ou
+  `guardians`, por exemplo, mas nada dentro de `photo_faces` propriamente.
+- **`trg_forbid_minor_faces`** (`BEFORE INSERT on photo_faces`) é quem
+  contém um bug *dentro* do escopo já concedido — ele dispara para
+  **qualquer** role, `worker_service` incluído, porque é um trigger, e
+  trigger é um mecanismo do Postgres completamente à parte de RLS: não é
+  policy, não é afetado por `bypassrls`, roda para qualquer executor do
+  `INSERT`, `service_role` incluído. Essa é a camada que efetivamente
+  conteria uma falha na checagem de `internal/jobs/index_faces.go` — não
+  RLS, que não está em jogo em ponto nenhum desta cadeia.
+
+As duas juntas não formam "RLS mais alguma coisa": nenhuma das duas é RLS.
+São um controle de acesso por tabela (grant) e uma restrição de conteúdo de
+linha (trigger), e é essa combinação — não RLS — que substitui, para este
+role, a proteção que RLS dá aos roles `authenticated`/`anon`.
+
+## Tabelas que `worker_service` não pode tocar
+
+Sem `bypassrls` valendo policy nenhuma para este role, a lista abaixo **é**
+a proteção — não há policy de RLS reforçando por trás. `worker_service` não
+tem grant algum, em operação alguma, nas seguintes tabelas:
+
+`profiles`, `guardians`, `minors`, `minor_consents`, `photo_grants`,
+`face_consents`, `access_logs`, `removal_requests`.
+
+Qualquer tentativa de leitura ou escrita nessas tabelas a partir do worker
+falha com erro de permissão do Postgres (`42501`), não é silenciosamente
+filtrada como aconteceria com RLS para `authenticated`.
+
+## Escopo negado deliberadamente dentro das próprias tabelas concedidas
+
+Além das tabelas inteiras listadas acima, uma operação negada dentro de uma
+tabela onde `worker_service` **tem** grant:
 
 - `delete` em `photo_faces`: não concedido nesta entrega — `purge_expired_
   embeddings` está implementado como esqueleto que marca o job como
   `skipped`, sem excluir nada (regra de retenção pendente de revisão
   jurídica, `ARQUITETURA.md` §12). Se esse job for implementado de verdade
   no futuro, o grant de `delete` em `photo_faces` entra junto, não antes.
-- Qualquer grant em `profiles`, `guardians`, `minors`, `minor_consents`,
-  `photo_grants`, `face_consents`, `access_logs`, `removal_requests`: o
-  worker não toca nenhuma dessas tabelas conforme `ARQUITETURA.md` §6.
 
 ## Consequências
 
