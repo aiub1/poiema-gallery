@@ -30,7 +30,11 @@ vinculado — decisões registradas em [ADR
 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md).
 `photo_grants`/`search_faces` (fase 4) **não entraram** nesta migration; o
 ramo de `is_private` em `read photos` continua fail closed até lá.
-Em andamento: nenhuma — próxima fase (4 — Faces) ainda não começou.
+Em andamento: as três pendências de schema do `ARQUITETURA.md` §15
+(`profiles_full_name_not_blank`, unicidade de nome de sessão por evento,
+índice em `events.created_by`) foram fechadas numa migration à parte —
+branch `fix/schema-pendencias`, aguardando revisão e merge em `develop`.
+Fora isso, próxima fase (4 — Faces) ainda não começou.
 
 ---
 
@@ -87,7 +91,14 @@ Em andamento: nenhuma — próxima fase (4 — Faces) ainda não começou.
   - `minor_consents` é só registro legal nesta fase — não gateia leitura
     (decisão deliberada, ADR 0005): revogar consentimento não pode cegar o
     próprio responsável para a foto do filho.
-- 60 testes pgTAP, passando localmente via `npx supabase test db`:
+- Migration `20260911062131_schema_cleanup_pendencias.sql`: fecha as três
+  pendências do `ARQUITETURA.md` §15 — `profiles_full_name_not_blank` (já
+  documentada em §4, nunca tinha entrado em migration),
+  `sessions_event_id_name_key` (índice único **normalizado**
+  `(event_id, lower(btrim(name)))`, não o `unique (event_id, name)` literal
+  — ver [ADR 0008](adr/0008-session-name-uniqueness-normalized.md)) e
+  `events_created_by_idx`.
+- 67 testes pgTAP, passando localmente via `npx supabase test db`:
   - `00_foundation.sql` (25): um cenário por papel (admin/uploader/member/
     perfil inativo/anon), incluindo autopromoção, delete em `profiles`,
     provisionamento inativo e uploader editando sessão alheia. Ajustado na
@@ -108,6 +119,11 @@ Em andamento: nenhuma — próxima fase (4 — Faces) ainda não começou.
     foto de menor não vinculado a ele, responsável inativo não lê a foto do
     filho, `uploader` marca `photo_minors` mas não cria vínculo, `admin`
     cria vínculo em `guardians`.
+  - `04_schema_pendencias.sql` (7): `full_name` vazio e só-com-espaço
+    rejeitados (`23514`), sessão duplicada no mesmo evento rejeitada tanto
+    no nome idêntico quanto em capitalização/espaço diferente (`23505`),
+    mesmo nome em evento diferente aceito (unicidade é por evento),
+    `events_created_by_idx` existe.
 - `seed.sql` com 4 perfis (um por papel, mais uma conta desativada), 1
   evento, 1 sessão, 3 fotos do uploader (`contains_minors` true/false/null),
   1 `removal_request` pendente, 1 `job` na fila, 1 menor com vínculo e
@@ -143,8 +159,6 @@ Em andamento: nenhuma — próxima fase (4 — Faces) ainda não começou.
 - Tabelas `face_consents`, `photo_grants`, função `search_faces` (fase 4).
   `photo_faces` já existe — antecipada na fase 2, ver ADR 0004.
   `minors`/`guardians`/`minor_consents`/`photo_minors` já existem — fase 3.
-- `constraint profiles_full_name_not_blank` (ARQUITETURA.md §4/§15): fora do
-  escopo desta correção, que seguiu só §5.1-5.3.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
 - Qualquer código em `worker/` e `services/face/` (só scaffolding de pastas

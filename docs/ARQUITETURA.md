@@ -119,6 +119,7 @@ create table events (
   deleted_at  timestamptz  -- soft delete (ADR 0004); só service_role grava
 );
 create index events_event_date_idx on events (event_date desc);
+create index events_created_by_idx on events (created_by);  -- suporte à FK on delete restrict
 
 create table sessions (
   id         uuid primary key default gen_random_uuid(),
@@ -129,6 +130,11 @@ create table sessions (
   created_at timestamptz not null default now()
 );
 create index sessions_event_id_position_idx on sessions (event_id, position);
+-- Normalizado, não unique(event_id, name) literal: o caso real é recadastro
+-- acidental com capitalização/espaço diferente, não duas sessões distintas
+-- de propósito (ADR 0008).
+create unique index sessions_event_id_name_key
+  on sessions (event_id, lower(btrim(name)));
 
 -- ---------------------------------------------------------------
 -- menores: cadastro da secretaria, NÃO são usuários do sistema
@@ -878,12 +884,14 @@ Levantadas na revisão da fase 1 e ainda não decididas:
   ([ADR 0004](adr/0004-events-soft-delete-and-photo-faces-timing.md)):
   `events` ganha soft delete e perde `DELETE` real para todo papel
   autenticado; `photos.event_id` passa a `on delete restrict`.
-- **`sessions` sem `unique (event_id, name)`.** Duas sessões "Culto da manhã"
-  no mesmo evento são possíveis hoje.
-- **`events.created_by` sem índice.** FK `on delete restrict` sem índice de
-  apoio; irrelevante agora, incomoda quando a tabela crescer.
-- **`profiles_full_name_not_blank` (§4) ainda não está na migration.** A
-  correção de RLS/triggers seguiu só §5.1-5.3, que é onde vive o que os 8
-  itens auditados cobriam; a constraint de `full_name` é schema puro (§4) e
-  ficou de fora por escopo, não por esquecimento. Entra na próxima migration
-  que tocar `profiles`.
+- ~~**`sessions` sem `unique (event_id, name)`.**~~ **Resolvida**
+  (`20260911062131_schema_cleanup_pendencias.sql`): índice único
+  normalizado `sessions_event_id_name_key` sobre
+  `(event_id, lower(btrim(name)))`, não o literal — ver [ADR
+  0008](adr/0008-session-name-uniqueness-normalized.md) pelo motivo de não
+  ser `unique (event_id, name)` puro.
+- ~~**`events.created_by` sem índice.**~~ **Resolvida**
+  (`20260911062131_schema_cleanup_pendencias.sql`): `events_created_by_idx`.
+- ~~**`profiles_full_name_not_blank` (§4) ainda não está na migration.**~~
+  **Resolvida** (`20260911062131_schema_cleanup_pendencias.sql`): a
+  constraint já documentada em §4 finalmente entrou em migration.
