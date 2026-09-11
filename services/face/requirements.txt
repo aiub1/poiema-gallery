@@ -8,3 +8,13 @@ onnxruntime==1.20.1
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
 prometheus-client==0.21.1
+
+# Dependências reais de runtime do insightface (model_zoo, utils.face_align,
+# utils.download) — declaradas aqui porque o Dockerfile instala insightface
+# com --no-deps (ver ADR 0010, decisão 6): sem isso, o pip traria também
+# matplotlib/scipy/albumentations/scikit-learn/prettytable/easydict, que o
+# código não usa (só existem por causa do MaskRenderer, nunca chamado aqui).
+onnx==1.22.0
+scikit-image==0.26.0
+requests==2.34.2
+tqdm==4.70.1

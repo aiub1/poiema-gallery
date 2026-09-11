@@ -193,8 +193,17 @@ ainda não começou.
     testes substituam por um stub sem baixar o modelo real.
 - `Dockerfile`: modelo `buffalo_l` baixado em build-time
   (`download_model.py`, builder stage) para `/opt/insightface/models` —
-  nunca em runtime. `uvicorn ... --no-access-log` (o log de acesso padrão
-  loga IP do cliente em claro, proibido por `CLAUDE.md` §5.2).
+  nunca em runtime. `insightface` instalado com `--no-deps` (evita
+  `matplotlib`/`scipy`/`albumentations`/`scikit-learn`, nunca usados —
+  só existem por causa do `MaskRenderer`, que este serviço não chama);
+  `requirements.txt` declara as dependências reais (`onnx`,
+  `scikit-image`, `requests`, `tqdm`). `uvicorn ... --no-access-log` (o
+  log de acesso padrão loga IP do cliente em claro, proibido por
+  `CLAUDE.md` §5.2). Decisões e números medidos (tamanho da imagem antes/
+  depois, cold start) em [ADR
+  0010](adr/0010-face-service-implementation.md), decisão 6 — validado com
+  `docker build` + container real rodando `/health` e `/embed` com o
+  modelo de verdade (não só os testes com stub).
 - `tests/`: 12 testes pytest — 401 sem token/com token errado (`/detect`,
   `/embed`, `/metrics`), `/health` sem auth, `/embed` 422 sem rosto, melhor
   rosto retornado quando há mais de um, `/embed` não escreve em disco

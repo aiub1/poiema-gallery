@@ -24,11 +24,19 @@ Contrato completo em `docs/CONTRATO.md` §3.
 
 ## Modelo: empacotado na imagem, não baixado em runtime
 
-`buffalo_l` tem ~280 MB. Baixar no primeiro uso é mais leve no repositório,
-mas o free tier do Fly.io hiberna a máquina por inatividade — todo cold
-start pagaria rede + disco de novo. Por isso o `Dockerfile` baixa o modelo
-em build-time (`download_model.py`, roda uma vez, no builder stage) e a
-imagem final só carrega pesos já em disco local.
+O pacote `buffalo_l` completo (detecção + landmarks 3D/2D + gênero/idade +
+reconhecimento) tem ~630 MB — medido no build real, não estimado. Baixar
+no primeiro uso é mais leve no repositório, mas o free tier do Fly.io
+hiberna a máquina por inatividade — todo cold start pagaria rede + disco
+de novo. Por isso o `Dockerfile` baixa o modelo em build-time
+(`download_model.py`, roda uma vez, no builder stage) e a imagem final só
+carrega pesos já em disco local.
+
+`insightface` é instalado com `--no-deps` no `Dockerfile` — a versão
+normal do pacote traz `matplotlib`/`scipy`/`albumentations`/`scikit-learn`
+que o serviço nunca usa (só existem por causa do `MaskRenderer`, nunca
+chamado aqui). Ver [ADR 0010](../../docs/adr/0010-face-service-implementation.md),
+decisão 6, para a investigação completa e os números medidos antes/depois.
 
 **O modelo nunca é commitado no git** — `download_model.py` só roda dentro
 do build da imagem Docker.
