@@ -83,3 +83,21 @@ insert into public.removal_requests (photo_id, requested_by, reason) values
 
 insert into public.jobs (type, payload) values
   ('index_faces', jsonb_build_object('photo_id', '55555555-5555-5555-5555-555555555551'));
+
+-- Fase 3: um menor, vínculo com o membro seed, consentimento registrado, e
+-- a marcação ligando o menor à foto que já tem contains_minors = true.
+insert into public.minors (id, full_name, birth_date, created_by) values
+  ('66666666-6666-6666-6666-666666666661', 'Menor de Teste', '2020-01-01',
+   '11111111-1111-1111-1111-111111111111');
+
+insert into public.guardians (guardian_id, minor_id, relation, created_by) values
+  ('33333333-3333-3333-3333-333333333333', '66666666-6666-6666-6666-666666666661',
+   'mãe', '11111111-1111-1111-1111-111111111111');
+
+insert into public.minor_consents (minor_id, guardian_id, terms_version) values
+  ('66666666-6666-6666-6666-666666666661', '33333333-3333-3333-3333-333333333333',
+   '2026-08-v1');
+
+insert into public.photo_minors (photo_id, minor_id, tagged_by) values
+  ('55555555-5555-5555-5555-555555555552', '66666666-6666-6666-6666-666666666661',
+   '22222222-2222-2222-2222-222222222222');
