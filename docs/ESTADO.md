@@ -1,8 +1,9 @@
 # Estado do projeto
 
 Última atualização: 2026-09-11 · snapshot, não documento vivo como
-`ARQUITETURA.md`. Reflete o que existe de fato no branch `develop`, não o
-plano — para o plano completo ver `ARQUITETURA.md` §13 (Roadmap).
+`ARQUITETURA.md`. Reflete o que existe de fato no branch `develop` mais o
+que está implementado localmente aguardando merge (ver nota de cada fase),
+não o plano — para o plano completo ver `ARQUITETURA.md` §13 (Roadmap).
 
 ---
 
@@ -30,11 +31,17 @@ vinculado — decisões registradas em [ADR
 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md).
 `photo_grants`/`search_faces` (fase 4) **não entraram** nesta migration; o
 ramo de `is_private` em `read photos` continua fail closed até lá.
-Em andamento: as três pendências de schema do `ARQUITETURA.md` §15
+As três pendências de schema do `ARQUITETURA.md` §15
 (`profiles_full_name_not_blank`, unicidade de nome de sessão por evento,
 índice em `events.created_by`) foram fechadas numa migration à parte —
-branch `fix/schema-pendencias`, aguardando revisão e merge em `develop`.
-Fora isso, próxima fase (4 — Faces) ainda não começou.
+branch `fix/schema-pendencias`, já mergeado em `develop` (PR #6).
+
+**Fase 4a — Faces, banco: ✅ implementada localmente**, branch
+`feat/phase4a-faces`, aguardando revisão e merge em `develop`. Migration
+`face_consents`, `photo_grants`, `search_faces`, terceiro e último estado
+de `read photos` — decisões registradas em [ADR
+0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md).
+Serviço Python e worker Go (fase 4b) ainda não começaram.
 
 ---
 
@@ -98,7 +105,27 @@ Fora isso, próxima fase (4 — Faces) ainda não começou.
   `(event_id, lower(btrim(name)))`, não o `unique (event_id, name)` literal
   — ver [ADR 0008](adr/0008-session-name-uniqueness-normalized.md)) e
   `events_created_by_idx`.
-- 67 testes pgTAP, passando localmente via `npx supabase test db`:
+- Migration `20260911123330_phase4a_faces.sql` (fase 4a):
+  - `face_consents`: RLS completa, só o próprio titular (ou admin) lê/grava
+    o próprio consentimento.
+  - `photo_grants`: sem policy de insert/update — só `search_faces` grava,
+    como `security definer`. Ganha policy de `delete` **só para admin**
+    (válvula de escape para falso positivo do limiar de similaridade,
+    ainda não calibrado — [ADR
+    0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md)).
+    Grant não removido é permanente: revogar `face_consents` bloqueia
+    buscas novas, não apaga grants já emitidos.
+  - `read photos` chega ao terceiro e último estado: troca só o ramo de
+    `is_private` para incluir `photo_grants`, o ramo de `contains_minors`
+    não mudou desde a fase 3.
+  - `search_faces`: `is_member()`, consentimento ativo, rate limit de
+    20 buscas/hora via `access_logs`, terceira trava de `contains_minors`
+    (redundante com as duas do trigger em `photo_faces`, de propósito).
+    Implementada com CTE que grava e lê no mesmo `WITH`, não com
+    `create temp table ... on commit drop` como `ARQUITETURA.md` §5.4
+    documentava originalmente — motivo em ADR 0009 (a versão com tabela
+    temporária quebrava numa segunda chamada dentro da mesma transação).
+- 81 testes pgTAP, passando localmente via `npx supabase test db`:
   - `00_foundation.sql` (25): um cenário por papel (admin/uploader/member/
     perfil inativo/anon), incluindo autopromoção, delete em `profiles`,
     provisionamento inativo e uploader editando sessão alheia. Ajustado na
@@ -124,11 +151,22 @@ Fora isso, próxima fase (4 — Faces) ainda não começou.
     no nome idêntico quanto em capitalização/espaço diferente (`23505`),
     mesmo nome em evento diferente aceito (unicidade é por evento),
     `events_created_by_idx` existe.
+  - `05_faces_rls.sql` (14, fase 4a): perfil inativo/sem consentimento/
+    consentimento revogado não executam `search_faces`, rate limit dispara
+    na 21ª busca, foto com `contains_minors = true` nunca aparece no
+    resultado mesmo com embedding plantado à força (trigger de insert
+    desligado só dentro da transação de teste, para isolar a terceira
+    trava das outras duas), foto soft-deletada não aparece, grant emitido
+    libera a leitura da foto privada em `read photos`, admin remove o
+    grant mas member/uploader (mesmo o titular) não conseguem, e a foto
+    volta a ficar invisível depois da remoção.
 - `seed.sql` com 4 perfis (um por papel, mais uma conta desativada), 1
   evento, 1 sessão, 3 fotos do uploader (`contains_minors` true/false/null),
   1 `removal_request` pendente, 1 `job` na fila, 1 menor com vínculo e
-  consentimento registrados e a marcação `photo_minors` na foto que já tem
-  `contains_minors = true` — perfis criados via `auth.users` (trigger de
+  consentimento registrados, a marcação `photo_minors` na foto que já tem
+  `contains_minors = true`, 1 `face_consents` ativo do membro seed e 1
+  embedding sintético em `photo_faces` na única foto que pode ser indexada
+  (`contains_minors = false`) — perfis criados via `auth.users` (trigger de
   provisionamento) e ativados por `update`, não por `insert` direto.
 - `config.toml` gerado por `supabase init`, Postgres 15 fixado (major_version).
 
@@ -156,13 +194,12 @@ Fora isso, próxima fase (4 — Faces) ainda não começou.
   versionado.
 
 ### O que ainda **não** existe
-- Tabelas `face_consents`, `photo_grants`, função `search_faces` (fase 4).
-  `photo_faces` já existe — antecipada na fase 2, ver ADR 0004.
-  `minors`/`guardians`/`minor_consents`/`photo_minors` já existem — fase 3.
+- Qualquer código em `worker/` e `services/face/` (fase 4b) — o consumo
+  real de `search_faces`/`photo_faces` pelo worker Go e pelo serviço facial
+  Python. Banco da fase 4a (`face_consents`, `photo_grants`,
+  `search_faces`) já existe, implementado localmente.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
-- Qualquer código em `worker/` e `services/face/` (só scaffolding de pastas
-  e READMEs).
 - Apps Fly.io, projeto Supabase remoto — nada provisionado.
 - Bucket R2: código em `infra/` (branch `feat/infra-r2-bucket`,
   `cloudflare_r2_bucket` fixado em provider `4.52.9`/Tofu `1.12.6`,
@@ -187,7 +224,8 @@ Fora isso, próxima fase (4 — Faces) ainda não começou.
 
 ## Próximo passo natural
 
-Merge de `feat/phase2-photos` e `feat/phase3-minors` em `develop`, depois
-bucket R2 via OpenTofu (`infra/`, pendente da fase 2) e Fase 4 — Faces
-(`ARQUITETURA.md` §13): `face_consents`, `photo_grants`, `search_faces`,
-serviço Python, worker Go.
+Merge de `feat/phase2-photos`, `feat/phase3-minors` e `feat/phase4a-faces`
+em `develop`, depois bucket R2 via OpenTofu (`infra/`, pendente da fase 2,
+`tofu apply` ainda não rodado) e Fase 4b — Faces, worker e serviço
+(`ARQUITETURA.md` §13): consumo real de `search_faces`/`photo_faces` pelo
+serviço Python e pelo worker Go.
