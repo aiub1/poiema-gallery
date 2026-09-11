@@ -118,6 +118,9 @@ papel para nulo e o usuário deixa de enxergar o acervo. Ver §5.1.
 - Python: `ruff` + `mypy`, tipagem explícita nos handlers.
 - Conventional Commits.
 - Decisão relevante vira ADR em `docs/adr/NNNN-title.md`, em inglês.
+- **Sem menção de co-autoria do Claude/Claude Code** em commits ou PRs — nada
+  de `Co-Authored-By: Claude ...` no rodapé do commit, nem
+  `Generated with Claude Code` na descrição do PR. Instrução do cliente.
 
 ---
 

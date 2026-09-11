@@ -21,6 +21,7 @@ the ordinal is the human's.
 | # | File | Subject |
 |---|---|---|
 | 0001 | `20260830060023_foundation.sql` | `user_role`, `profiles` (role helpers, privileged-column guard, `auth.users` provisioning trigger), `events`, `sessions` |
+| 0002 | `20260910224708_phase2_photos.sql` | `events` soft delete, `photos`, `photo_faces` (antecipada — [ADR 0004](0004-events-soft-delete-and-photo-faces-timing.md)), `removal_requests`, `jobs`, `access_logs` |
 
 New migrations are created with `npx supabase migration new <name>`, never by
 hand-typing a timestamp.

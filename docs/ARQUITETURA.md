@@ -1,6 +1,6 @@
 # Arquitetura — galeria-core
 
-Versão 1.1 · Banco, worker e serviço facial. Documento vivo.
+Versão 1.2 · Banco, worker e serviço facial. Documento vivo.
 Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
 
 > **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
@@ -8,6 +8,15 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
 > o acervo inteiro); `sessions` ganha `created_by`; `security definer` passa a
 > exigir `pg_temp` no `search_path`; papel e `is_active` viram imutáveis por
 > trigger; perfil deixa de ser excluível.
+
+> **Mudanças da 1.1 para a 1.2** (fase 2 — [ADR 0004](adr/0004-events-soft-delete-and-photo-faces-timing.md))
+> — `events` ganha soft delete (`deleted_at`) e perde `DELETE` real para todo
+> papel autenticado, admin incluído (só `service_role` grava `deleted_at`,
+> nunca o JWT do cliente); `photos.event_id` passa de `on delete cascade`
+> para `on delete restrict`, fechando a pendência do §15; `read photos`
+> ganha a exigência de que o evento não esteja soft-deletado; `photo_faces`
+> é antecipada da fase 4 para a fase 2, junto dos dois triggers de proteção
+> de menores que dependem dela.
 
 ---
 
@@ -96,7 +105,8 @@ create table events (
   cover_key   text,
   event_date  date not null,
   created_by  uuid not null references profiles(id) on delete restrict,
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  deleted_at  timestamptz  -- soft delete (ADR 0004); só service_role grava
 );
 create index events_event_date_idx on events (event_date desc);
 
@@ -146,7 +156,7 @@ create type photo_status as enum
 
 create table photos (
   id              uuid primary key default gen_random_uuid(),
-  event_id        uuid not null references events(id) on delete cascade,
+  event_id        uuid not null references events(id) on delete restrict,  -- ADR 0004
   session_id      uuid references sessions(id) on delete set null,
   uploaded_by     uuid not null references profiles(id) on delete restrict,
   storage_key     text not null,
@@ -183,6 +193,10 @@ create table photo_grants (
 
 -- ---------------------------------------------------------------
 -- ⚠️ SENSÍVEL — só adultos consentidos, nunca menores
+-- Tabela antecipada para a fase 2 (ADR 0004): os dois triggers da seção
+-- 5.3 fazem insert/delete aqui e precisavam da tabela para existir antes
+-- de qualquer foto entrar no banco. face_consents e photo_grants abaixo
+-- continuam na fase 4 — nada os usa antes de search_faces existir.
 -- ---------------------------------------------------------------
 create table photo_faces (
   id         uuid primary key default gen_random_uuid(),
@@ -333,7 +347,8 @@ revoke delete on profiles from authenticated;
 
 -- events / sessions
 create policy "read events" on events
-  for select to authenticated using ((select is_member()));
+  for select to authenticated
+  using (deleted_at is null and (select is_member()));
 create policy "create events" on events
   for insert to authenticated
   with check ((select can_upload()) and created_by = (select auth.uid()));
@@ -341,8 +356,15 @@ create policy "update events" on events
   for update to authenticated
   using ((select is_admin()) or created_by = (select auth.uid()))
   with check ((select is_admin()) or created_by = (select auth.uid()));
+-- "delete events" fica sem efeito prático (ADR 0004): DELETE real é
+-- revogado do papel authenticated inteiro logo abaixo, admin incluído.
+-- Soft delete é a única forma de "excluir" um evento, e só service_role
+-- grava deleted_at — o Postgres exige que a linha resultante de um UPDATE
+-- sob RLS também passe pela policy de SELECT acima, e nenhuma sessão
+-- autenticada normal jamais teria essa permissão.
 create policy "delete events" on events
   for delete to authenticated using ((select is_admin()));
+revoke delete on events from authenticated;
 
 create policy "read sessions" on sessions
   for select to authenticated using ((select is_member()));
@@ -396,6 +418,8 @@ create policy "read photos" on photos
     deleted_at is null
     and status <> 'pending_review'
     and (select is_member())
+    and exists (select 1 from events e
+                 where e.id = photos.event_id and e.deleted_at is null)
     and (
       (select is_admin())
       or uploaded_by = (select auth.uid())
@@ -479,6 +503,14 @@ create policy "admin reads logs" on access_logs
 As chamadas vêm embrulhadas em `(select ...)` de propósito: o Postgres as
 transforma em InitPlan e avalia uma vez por query em vez de uma vez por linha.
 Irrelevante em `profiles`, decisivo em `read photos`.
+
+**`read photos` na fase 2 é uma versão reduzida da acima.** `guardians`,
+`photo_minors` e `photo_grants` só existem a partir das fases 3/4, então o
+ramo de `is_guardian_of_photo()` e o `exists (select ... from photo_grants
+...)` ainda não existem na migration da fase 2 — até lá, `contains_minors =
+true` e `is_private = true` ficam visíveis só para admin/uploader dono
+(fail closed). A migration da fase 3/4 correspondente troca a policy pela
+versão completa documentada aqui.
 
 ### 5.3 Triggers de proteção
 
@@ -778,19 +810,23 @@ tempo de `search_faces`.
 
 ## 13. Roadmap
 
-**Fase 1 — Fundação. ✅ Implementada**, aguardando merge para `develop`
-(branch `fix/fundacao-rls-completa`). Migrations de `profiles`, `events`,
-`sessions`. Funções de papel, provisionamento de perfis e bootstrap do
-primeiro admin. RLS e pgTAP. CI verde.
+**Fase 1 — Fundação. ✅ Concluída** (PR #1 e PR #2, ambos mergeados em
+`develop`). Migrations de `profiles`, `events`, `sessions`. Funções de
+papel, provisionamento de perfis e bootstrap do primeiro admin. RLS e
+pgTAP. CI verde.
 
-**Fase 2 — Fotos.** `photos`, `removal_requests`, `jobs`, `access_logs`.
-Bucket R2 via OpenTofu.
+**Fase 2 — Fotos. ✅ Implementada localmente**, branch `feat/phase2-photos`,
+aguardando merge em `develop`. `photos`, `removal_requests`, `jobs`,
+`access_logs`, soft delete de `events` e `photo_faces` antecipada da fase 4
+com os dois triggers de proteção de menores ([ADR
+0004](adr/0004-events-soft-delete-and-photo-faces-timing.md)). Bucket R2 via
+OpenTofu **não entrou** — fica para quando `infra/` ganhar código.
 
 **Fase 3 — Menores.** `minors`, `guardians`, `minor_consents`, `photo_minors`,
 policies e triggers de proteção. **Antes de existir qualquer embedding.**
 
-**Fase 4 — Faces.** `photo_faces`, `face_consents`, `photo_grants`,
-`search_faces`, serviço Python, worker Go.
+**Fase 4 — Faces.** `face_consents`, `photo_grants`, `search_faces`, serviço
+Python, worker Go. `photo_faces` já existe desde a fase 2 (ADR 0004).
 
 **Fase 5 — Acabamento.** Retenção automática, métricas, calibração do limiar.
 
@@ -819,10 +855,10 @@ crescer, Supabase Pro (US$ 25/mês) resolve pausa, backup e espaço.
 
 Levantadas na revisão da fase 1 e ainda não decididas:
 
-- **`delete` de evento cascateia até `photos`.** Fotos usam soft delete e a
-  limpeza do R2 depende do job `delete_objects`; excluir um evento apaga fotos
-  de verdade e deixa objetos órfãos. Resolver na fase 2: ou `on delete restrict`
-  em `photos.event_id`, ou exclusão de evento também vira soft delete.
+- ~~**`delete` de evento cascateia até `photos`.**~~ **Resolvida na fase 2**
+  ([ADR 0004](adr/0004-events-soft-delete-and-photo-faces-timing.md)):
+  `events` ganha soft delete e perde `DELETE` real para todo papel
+  autenticado; `photos.event_id` passa a `on delete restrict`.
 - **`sessions` sem `unique (event_id, name)`.** Duas sessões "Culto da manhã"
   no mesmo evento são possíveis hoje.
 - **`events.created_by` sem índice.** FK `on delete restrict` sem índice de

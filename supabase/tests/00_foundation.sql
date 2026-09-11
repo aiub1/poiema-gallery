@@ -90,9 +90,13 @@ select lives_ok(
   'uploader cria sessão'
 );
 
-select is_empty(
+-- DELETE em events foi revogado de authenticated na fase 2 (docs/adr/0004):
+-- "excluir" um evento passa a ser soft delete via update de deleted_at.
+select throws_ok(
   $$ delete from public.events where id = 'e0000000-0000-0000-0000-00000000e002' returning 1 $$,
-  'uploader não apaga evento (nem o próprio)'
+  '42501',
+  null,
+  'uploader não apaga evento (nem o próprio) — delete revogado, só soft delete'
 );
 
 select throws_ok(
