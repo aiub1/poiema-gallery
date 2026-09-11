@@ -47,8 +47,26 @@ de `read photos` — decisões registradas em [ADR
 `services/face/`: `/detect`, `/embed`, `/health`, `/metrics`, auth por
 `X-Service-Token`, modelo empacotado na imagem Docker (não baixado em
 runtime) — decisões registradas em [ADR
-0010](adr/0010-face-service-implementation.md). Worker Go (também fase 4b)
-ainda não começou.
+0010](adr/0010-face-service-implementation.md).
+
+**Fase 4b — Faces, worker Go: ✅ implementada localmente**, branch
+`feat/phase4b-worker`, aguardando revisão e merge em `develop`.
+`worker/cmd/worker`, `worker/internal/{jobs,faces,storage}` — claim de job
+(`FOR UPDATE SKIP LOCKED` + lease de 10 min para job travado por worker
+morto), retry exponencial (máx. 5 tentativas), os três tipos de job
+(`index_faces` completo; `delete_objects` completo no código, sem efeito
+até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
+`skipped`, implementação real pendente de revisão jurídica —
+`ARQUITETURA.md` §12), cliente HTTP do serviço facial, cliente R2
+(URL assinada de leitura, `delete_objects`). Decisões em [ADR
+0011](adr/0011-worker-service-role.md).
+
+> ⚠️ **Pendência bloqueante:** o worker usa um role Postgres restrito
+> (`worker_service`, `bypassrls`, grants só em
+> `photos`/`photo_faces`/`jobs` — ADR 0011), não `service_role`. A migration
+> que cria esse role **ainda não existe** em `supabase/migrations/` — é a
+> **próxima tarefa**, não um item de backlog. Sem ela, `go run
+> ./cmd/worker` não tem para onde conectar (`worker/README.md`).
 
 ---
 
@@ -220,8 +238,10 @@ ainda não começou.
 - Job `face-service`: roda de verdade agora que
   `services/face/requirements.txt` existe — `ruff check .`, `mypy main.py`,
   `pytest`.
-- Jobs `worker`, `infra`: existem no workflow mas ficam no-op (guardados
-  por `hashFiles`) até `worker/go.mod` e `infra/*.tf` existirem.
+- Job `worker`: roda de verdade agora que `worker/go.mod` existe —
+  `go build`, `go vet`, `gofmt -l` e `go test`, sem guarda de `hashFiles`.
+- Job `infra`: existe no workflow mas fica no-op (guardado por `hashFiles`)
+  até `infra/*.tf` ter arquivos versionados no branch em avaliação.
 - Job `deploy` (branch `main`): esqueleto com TODOs, sem credenciais
   configuradas ainda.
 
@@ -240,10 +260,9 @@ ainda não começou.
   versionado.
 
 ### O que ainda **não** existe
-- Qualquer código em `worker/` (fase 4b) — o consumo real de
-  `search_faces`/`photo_faces` pelo worker Go, incluindo a chamada real a
-  `services/face` a partir do job `index_faces`. `services/face/` já existe
-  (ver seção acima); banco da fase 4a já existe, implementado localmente.
+- A migration que cria o role `worker_service` (ADR 0011) — **bloqueante**
+  para o worker rodar de verdade, mesmo com o código implementado e
+  testado. Ver nota no início da seção "Fase 4b — Faces, worker Go" acima.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
 - Apps Fly.io, projeto Supabase remoto — nada provisionado.
@@ -263,18 +282,23 @@ ainda não começou.
 
 - Stack Supabase validado via Docker (`npx supabase start`), mas **parado**
   no momento — não fica rodando entre sessões.
-- Sem Go nem OpenTofu instalados neste ambiente (não bloqueia a Fase 1, vai
-  bloquear a Fase 2/4 quando `worker/` e `infra/` ganharem código). Sem
-  `pip`/`venv` de sistema neste ambiente — `services/face/` foi validado
-  (`ruff`, `mypy`, `pytest`) rodando dentro de um container
-  `python:3.12-slim` via Docker, não em venv local.
+- Go 1.23.12 instalado localmente em `~/go1.23.12` (tarball oficial, sem
+  `sudo` disponível neste ambiente — não em `/usr/local`); `worker/go.mod`
+  fixa `go 1.23.12`. `go build`, `go vet`, `gofmt -l` e `go test ./...`
+  validados localmente. OpenTofu segue não instalado (bloqueia `infra/`
+  quando ganhar código de verdade). Sem `pip`/`venv` de sistema neste
+  ambiente — `services/face/` foi validado (`ruff`, `mypy`, `pytest`)
+  rodando dentro de um container `python:3.12-slim` via Docker, não em venv
+  local.
 
 ---
 
 ## Próximo passo natural
 
-Merge de `feat/phase2-photos`, `feat/phase3-minors`, `feat/phase4a-faces` e
-`feat/phase4b-face-service` em `develop`, depois bucket R2 via OpenTofu
-(`infra/`, pendente da fase 2, `tofu apply` ainda não rodado) e o restante
-da Fase 4b — worker Go consumindo `search_faces`/`photo_faces` e chamando
-`services/face` de verdade (`ARQUITETURA.md` §13).
+Merge de `feat/phase2-photos`, `feat/phase3-minors`, `feat/phase4a-faces`,
+`feat/phase4b-face-service` e `feat/phase4b-worker` em `develop`. Antes de
+qualquer deploy: migration criando o role `worker_service` (ADR 0011) —
+bloqueante, sem ela o worker não conecta em banco nenhum. Depois: bucket R2
+via OpenTofu (`infra/`, pendente da fase 2, `tofu apply` ainda não rodado),
+necessário para o worker assinar URLs de leitura e rodar `delete_objects`
+de verdade.
