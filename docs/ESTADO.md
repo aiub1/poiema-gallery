@@ -149,10 +149,15 @@ Em andamento: nenhuma — próxima fase (4 — Faces) ainda não começou.
   escopo tratado.
 - Qualquer código em `worker/` e `services/face/` (só scaffolding de pastas
   e READMEs).
-- `infra/` (OpenTofu) — só README, nenhum `.tf`.
-- Bucket R2, apps Fly.io, projeto Supabase remoto — nada provisionado.
-- `docs/adr/0005-supabase-manual-setup.md`, referenciada em
-  `ARQUITETURA.md` §9 mas ainda não escrita.
+- Apps Fly.io, projeto Supabase remoto — nada provisionado.
+- Bucket R2: código em `infra/` (branch `feat/infra-r2-bucket`,
+  `cloudflare_r2_bucket` fixado em provider `4.52.9`/Tofu `1.12.6`,
+  `tofu validate` limpo), mas **`tofu apply` não foi rodado** — nada
+  provisionado de verdade ainda. Credencial S3-compatible do bucket fica
+  fora do Tofu de propósito — passo manual documentado em
+  `infra/README.md`. Decisões registradas em [ADR
+  0006](adr/0006-supabase-manual-setup.md) e [ADR
+  0007](adr/0007-tfstate-separate-bucket.md).
 - `galeria-web` — repositório separado, fora do escopo deste checkout.
 
 ---
