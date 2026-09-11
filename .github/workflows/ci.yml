@@ -99,7 +99,15 @@ jobs:
       - name: install deps
         if: steps.check.outputs.exists == 'true'
         working-directory: services/face
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
+      - name: ruff
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/face
+        run: ruff check .
+      - name: mypy
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/face
+        run: mypy main.py
       - name: pytest
         if: steps.check.outputs.exists == 'true'
         working-directory: services/face
