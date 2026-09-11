@@ -24,6 +24,7 @@ the ordinal is the human's.
 | 0002 | `20260910224708_phase2_photos.sql` | `events` soft delete, `photos`, `photo_faces` (antecipada — [ADR 0004](0004-events-soft-delete-and-photo-faces-timing.md)), `removal_requests`, `jobs`, `access_logs` |
 | 0003 | `20260911054031_phase3_minors.sql` | `minors`, `guardians`, `minor_consents`, `photo_minors`, `is_guardian_of_photo()`, `read photos` versão intermediária ([ADR 0005](0005-read-photos-phase-progression-and-consent-scope.md)) |
 | 0004 | `20260911062131_schema_cleanup_pendencias.sql` | `profiles_full_name_not_blank`, índice único normalizado `sessions_event_id_name_key` ([ADR 0008](0008-session-name-uniqueness-normalized.md)), `events_created_by_idx` — fecha as três pendências de `ARQUITETURA.md` §15 |
+| 0005 | `20260911123330_phase4a_faces.sql` | `face_consents`, `photo_grants`, `search_faces`, `read photos` versão final ([ADR 0009](0009-photo-grants-revocation-and-search-faces-hits-cte.md)) |
 
 New migrations are created with `npx supabase migration new <name>`, never by
 hand-typing a timestamp.

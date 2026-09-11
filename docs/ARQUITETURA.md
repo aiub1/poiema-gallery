@@ -1,6 +1,6 @@
 # Arquitetura — galeria-core
 
-Versão 1.3 · Banco, worker e serviço facial. Documento vivo.
+Versão 1.4 · Banco, worker e serviço facial. Documento vivo.
 Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
 
 > **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
@@ -27,6 +27,17 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
 > `minor_consents` fica só como registro legal, sem gatear leitura
 > (decisão deliberada, ver ADR 0005); `0005-supabase-manual-setup.md` (§9)
 > passa a `0006`.
+
+> **Mudanças da 1.3 para a 1.4** (fase 4a — [ADR
+> 0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md)) —
+> `face_consents`, `photo_grants`, `search_faces` entram; `read photos`
+> ganha o terceiro e último estado, trocando só o ramo de `is_private` para
+> incluir `photo_grants` (o ramo de `contains_minors` não muda desde a fase
+> 3); `photo_grants` ganha policy de `delete` só para `admin` — válvula de
+> escape para falso positivo do limiar, ainda não calibrado; `search_faces`
+> implementada sem tabela temporária (CTE que grava e lê no mesmo `WITH`),
+> não com `create temp table ... on commit drop` como o texto original
+> descrevia — motivo em ADR 0009.
 
 ---
 
@@ -481,7 +492,14 @@ create policy "read own grants" on photo_grants
   for select to authenticated
   using ((select is_admin())
          or ((select is_member()) and user_id = (select auth.uid())));
-revoke insert, update, delete on photo_grants from anon, authenticated;
+-- válvula de escape para falso positivo do limiar de similaridade (ainda
+-- não calibrado, §7): só admin remove, nem o próprio titular do grant
+-- (docs/adr/0009). Grant não removido é permanente por design — revogar
+-- face_consents bloqueia buscas novas, não apaga grants já emitidos.
+create policy "admin removes grants" on photo_grants
+  for delete to authenticated using ((select is_admin()));
+revoke all on photo_grants from anon;
+revoke insert, update on photo_grants from authenticated;
 
 -- photo_faces: sem policy de select = ninguém lê
 revoke all on photo_faces from anon, authenticated;
@@ -520,8 +538,9 @@ As chamadas vêm embrulhadas em `(select ...)` de propósito: o Postgres as
 transforma em InitPlan e avalia uma vez por query em vez de uma vez por linha.
 Irrelevante em `profiles`, decisivo em `read photos`.
 
-**`read photos` tem três estados, um por fase que a toca** (detalhado em
-[ADR 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md)):
+**`read photos` teve três estados, um por fase que a tocou** (detalhado em
+[ADR 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md) e
+[ADR 0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md)):
 
 1. **Fase 2** (aplicada): sem `guardians`/`photo_minors`/`photo_grants`.
    `contains_minors = true` e `is_private = true` ficam visíveis só para
@@ -529,9 +548,9 @@ Irrelevante em `profiles`, decisivo em `read photos`.
 2. **Fase 3** (aplicada): acrescenta só o ramo `is_guardian_of_photo(id)`.
    O ramo de `is_private` continua igual ao da fase 2 — ainda fail closed,
    porque `photo_grants` só chega na fase 4.
-3. **Fase 4** (futura): troca o ramo de `is_private` para incluir
+3. **Fase 4a** (aplicada): troca o ramo de `is_private` para incluir
    `exists (select ... from photo_grants ...)`, alcançando a versão acima,
-   que já é a forma final.
+   que já é a forma final — terceiro e último estado.
 
 ### 5.3 Triggers de proteção
 
@@ -664,7 +683,8 @@ begin
 
   insert into access_logs (user_id, action) values (v_user, 'face_search');
 
-  create temp table _hits on commit drop as
+  return query
+  with hits as (
     select f.photo_id as pid, min(f.embedding <=> p_embedding)::real as dist
     from photo_faces f
     join photos p on p.id = f.photo_id
@@ -674,24 +694,34 @@ begin
       and (f.embedding <=> p_embedding) < p_threshold
     group by f.photo_id
     order by dist
-    limit p_limit;
-
-  insert into photo_grants (user_id, photo_id)
-    select v_user, h.pid from _hits h
+    limit p_limit
+  ),
+  grant_ins as (
+    insert into photo_grants (user_id, photo_id)
+    select v_user, h.pid from hits h
     join photos p on p.id = h.pid
     where p.is_private
-  on conflict do nothing;
-
-  return query select h.pid, h.dist from _hits h order by h.dist;
+    on conflict do nothing
+    returning 1
+  )
+  select h.pid, h.dist from hits h order by h.dist;
 end;
 $$;
 
-revoke all on function search_faces from anon;
+revoke execute on function search_faces from public;
 grant execute on function search_faces to authenticated;
 ```
 
-Esta é a função que mais precisa do `pg_temp` no `search_path`: é
-`security definer` **e** cria tabela temporária.
+Não usa tabela temporária ([ADR
+0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md)):
+`create temp table ... on commit drop` só dropa no commit da transação, e
+uma segunda chamada na mesma transação falhava com "relation already
+exists". A CTE `grant_ins` é executada até o fim mesmo sem ser referenciada
+na consulta principal — comportamento documentado do `WITH` para
+statements que modificam dados, não uma otimização arriscada. `pg_temp` no
+`search_path` segue obrigatório: é `security definer`, e omiti-lo deixaria
+uma tabela temporária do chamador ser pesquisada antes de `public` na
+resolução de nomes dentro da função.
 
 ---
 
@@ -818,7 +848,7 @@ tempo de `search_faces`.
 
 - [ ] Aviso visível nos cultos sobre fotos e publicação interna
 - [ ] Autorização do responsável registrada em `minor_consents`
-- [ ] Consentimento do adulto para busca facial em `face_consents`
+- [x] Consentimento do adulto para busca facial em `face_consents`
 - [ ] Política de privacidade com finalidade, retenção e responsável
 - [ ] "Excluir meus dados faciais" funcional
 - [ ] "Remover fotos do meu filho" acessível ao responsável
@@ -850,8 +880,16 @@ com o ramo do responsável vinculado ([ADR
 0005](adr/0005-read-photos-phase-progression-and-consent-scope.md)).
 **Antes de existir qualquer embedding.**
 
-**Fase 4 — Faces.** `face_consents`, `photo_grants`, `search_faces`, serviço
-Python, worker Go. `photo_faces` já existe desde a fase 2 (ADR 0004).
+**Fase 4a — Faces, banco. ✅ Implementada localmente**, branch
+`feat/phase4a-faces`, aguardando revisão e merge em `develop`.
+`face_consents`, `photo_grants`, `search_faces`, terceiro e último estado
+de `read photos` ([ADR
+0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md)).
+`photo_faces` já existia desde a fase 2 (ADR 0004). **Serviço Python e
+worker Go ainda não entraram** — só banco nesta etapa.
+
+**Fase 4b — Faces, worker e serviço.** Consumo real de `search_faces` e
+`photo_faces` pelo worker Go e pelo serviço facial Python.
 
 **Fase 5 — Acabamento.** Retenção automática, métricas, calibração do limiar.
 
