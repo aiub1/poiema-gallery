@@ -41,7 +41,14 @@ branch `fix/schema-pendencias`, já mergeado em `develop` (PR #6).
 `face_consents`, `photo_grants`, `search_faces`, terceiro e último estado
 de `read photos` — decisões registradas em [ADR
 0009](adr/0009-photo-grants-revocation-and-search-faces-hits-cte.md).
-Serviço Python e worker Go (fase 4b) ainda não começaram.
+
+**Fase 4b — Faces, serviço Python: ✅ implementada localmente**, branch
+`feat/phase4b-face-service`, aguardando revisão e merge em `develop`.
+`services/face/`: `/detect`, `/embed`, `/health`, `/metrics`, auth por
+`X-Service-Token`, modelo empacotado na imagem Docker (não baixado em
+runtime) — decisões registradas em [ADR
+0010](adr/0010-face-service-implementation.md). Worker Go (também fase 4b)
+ainda não começou.
 
 ---
 
@@ -170,12 +177,42 @@ Serviço Python e worker Go (fase 4b) ainda não começaram.
   provisionamento) e ativados por `update`, não por `insert` direto.
 - `config.toml` gerado por `supabase init`, Postgres 15 fixado (major_version).
 
+### Serviço facial (`services/face/`, fase 4b)
+- `main.py`: FastAPI com `/detect`, `/embed`, `/health` (sem auth),
+  `/metrics` (com auth — decisão registrada em [ADR
+  0010](adr/0010-face-service-implementation.md)). Auth por
+  `X-Service-Token` (`hmac.compare_digest`) em `/detect`, `/embed` e
+  `/metrics`.
+  - `/embed`: multipart em memória, sem `tempfile`; eleva
+    `MultiPartParser.max_file_size` em vez de gravar em disco acima de
+    1 MB (limite padrão do Starlette) — ver ADR 0010, decisão 2.
+  - `/detect`: busca a imagem via `httpx` (streaming em memória, sem
+    disco), descarta rostos abaixo de `min_quality`.
+  - `get_face_app`: carrega o InsightFace sob demanda, uma vez por
+    processo — nunca no import do módulo nem no `lifespan`, para que os
+    testes substituam por um stub sem baixar o modelo real.
+- `Dockerfile`: modelo `buffalo_l` baixado em build-time
+  (`download_model.py`, builder stage) para `/opt/insightface/models` —
+  nunca em runtime. `uvicorn ... --no-access-log` (o log de acesso padrão
+  loga IP do cliente em claro, proibido por `CLAUDE.md` §5.2).
+- `tests/`: 12 testes pytest — 401 sem token/com token errado (`/detect`,
+  `/embed`, `/metrics`), `/health` sem auth, `/embed` 422 sem rosto, melhor
+  rosto retornado quando há mais de um, `/embed` não escreve em disco
+  (monkeypatch de `tempfile.*` + snapshot de diretório), `/embed` não loga
+  embedding/nome de arquivo/token, `/detect` filtra por `min_quality` e
+  converte bbox — todos offline, sem modelo real (`FakeFaceAnalysis` via
+  `app.dependency_overrides`) e sem rede real (`respx` mockando `httpx`).
+- `requirements.txt`/`requirements-dev.txt`: versões fixadas. `ruff`
+  (limpo) e `mypy --strict` (limpo) configurados em `pyproject.toml`.
+
 ### CI (`.github/workflows/ci.yml`)
 - Job `pr-title`: valida título do PR contra Conventional Commits.
 - Job `database`: `supabase start` → `db reset` → `test db`, roda de verdade.
-- Jobs `worker`, `face-service`, `infra`: existem no workflow mas ficam
-  no-op (guardados por `hashFiles`) até `worker/go.mod`,
-  `services/face/requirements.txt` e `infra/*.tf` existirem.
+- Job `face-service`: roda de verdade agora que
+  `services/face/requirements.txt` existe — `ruff check .`, `mypy main.py`,
+  `pytest`.
+- Jobs `worker`, `infra`: existem no workflow mas ficam no-op (guardados
+  por `hashFiles`) até `worker/go.mod` e `infra/*.tf` existirem.
 - Job `deploy` (branch `main`): esqueleto com TODOs, sem credenciais
   configuradas ainda.
 
@@ -194,10 +231,10 @@ Serviço Python e worker Go (fase 4b) ainda não começaram.
   versionado.
 
 ### O que ainda **não** existe
-- Qualquer código em `worker/` e `services/face/` (fase 4b) — o consumo
-  real de `search_faces`/`photo_faces` pelo worker Go e pelo serviço facial
-  Python. Banco da fase 4a (`face_consents`, `photo_grants`,
-  `search_faces`) já existe, implementado localmente.
+- Qualquer código em `worker/` (fase 4b) — o consumo real de
+  `search_faces`/`photo_faces` pelo worker Go, incluindo a chamada real a
+  `services/face` a partir do job `index_faces`. `services/face/` já existe
+  (ver seção acima); banco da fase 4a já existe, implementado localmente.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
 - Apps Fly.io, projeto Supabase remoto — nada provisionado.
@@ -218,14 +255,17 @@ Serviço Python e worker Go (fase 4b) ainda não começaram.
 - Stack Supabase validado via Docker (`npx supabase start`), mas **parado**
   no momento — não fica rodando entre sessões.
 - Sem Go nem OpenTofu instalados neste ambiente (não bloqueia a Fase 1, vai
-  bloquear a Fase 2/4 quando `worker/` e `infra/` ganharem código).
+  bloquear a Fase 2/4 quando `worker/` e `infra/` ganharem código). Sem
+  `pip`/`venv` de sistema neste ambiente — `services/face/` foi validado
+  (`ruff`, `mypy`, `pytest`) rodando dentro de um container
+  `python:3.12-slim` via Docker, não em venv local.
 
 ---
 
 ## Próximo passo natural
 
-Merge de `feat/phase2-photos`, `feat/phase3-minors` e `feat/phase4a-faces`
-em `develop`, depois bucket R2 via OpenTofu (`infra/`, pendente da fase 2,
-`tofu apply` ainda não rodado) e Fase 4b — Faces, worker e serviço
-(`ARQUITETURA.md` §13): consumo real de `search_faces`/`photo_faces` pelo
-serviço Python e pelo worker Go.
+Merge de `feat/phase2-photos`, `feat/phase3-minors`, `feat/phase4a-faces` e
+`feat/phase4b-face-service` em `develop`, depois bucket R2 via OpenTofu
+(`infra/`, pendente da fase 2, `tofu apply` ainda não rodado) e o restante
+da Fase 4b — worker Go consumindo `search_faces`/`photo_faces` e chamando
+`services/face` de verdade (`ARQUITETURA.md` §13).
