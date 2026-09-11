@@ -143,3 +143,12 @@ vite.config.ts.timestamp-*
 .vite/
 
 .nvmrc
+
+# OpenTofu (infra/)
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+crash.log
