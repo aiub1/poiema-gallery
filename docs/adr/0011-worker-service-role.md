@@ -126,3 +126,49 @@ tabela onde `worker_service` **tem** grant:
   não seja `postgres`/`anon`/`authenticated`/`service_role`), isso é motivo
   para voltar a esta ADR e revisar a decisão explicitamente — não para o
   worker cair silenciosamente para `service_role`.
+
+## Nota de aplicação (2026-09-14)
+
+A migration `20260914023701_worker_service_role.sql` aplica a decisão acima.
+Três acréscimos em relação ao SQL desta ADR, nenhum deles ampliando o que
+`worker_service` alcança em dados de aplicação:
+
+- `grant usage on schema public to worker_service;` — pré-requisito mecânico
+  dos três grants de tabela, não um grant a mais. O pseudo-role `PUBLIC` não
+  tem `USAGE` em `public` neste projeto (só `anon`/`authenticated`/
+  `service_role`/`postgres`, explicitamente); sem isso a connection string
+  do worker recebe `permission denied for schema public` antes de qualquer
+  `select`/`update`/`insert`.
+- `grant worker_service to postgres;` — não muda o alcance de
+  `worker_service`, muda quem pode assumir a identidade dele. Sem isso,
+  `set local role worker_service` falha (`permission denied to set role`)
+  para quem roda os testes pgTAP ou inspeciona o role pelo SQL editor.
+  `postgres` já tem a mesma membership em `anon`/`authenticated`/
+  `service_role` desde o bootstrap do próprio Supabase — isto só estende o
+  padrão ao role novo. **Mão única, verificada no catálogo**: a única linha
+  relevante em `pg_auth_members` é `postgres` como membro de
+  `worker_service` — não existe linha na direção contrária, então
+  `worker_service` não herda `pg_read_all_data`/`pg_monitor` nem qualquer
+  outro privilégio de `postgres`. Este grant amplia só quem pode assumir
+  `worker_service` para testar, nunca o que `worker_service` alcança.
+- `grant usage on schema extensions to worker_service;` — mesma categoria:
+  pgtap (usado pelos testes pgTAP via `set local role worker_service`) mora
+  em `extensions`, não em `public`, neste projeto. Sem `USAGE` ali, a
+  resolução de nome não qualificado de qualquer função de teste falha com
+  "does not exist" (comportamento do Postgres para busca em
+  `search_path`, não um erro de permissão explícito).
+  `authenticated`/`anon`/`service_role` já têm esta concessão pelo mesmo
+  bootstrap; aqui só replica o padrão. Não é usado por `worker_service` em
+  produção — só por quem testa assumindo o papel dele.
+
+**Senha do role não está na migration.** `create role worker_service login
+bypassrls;` nasce sem senha — segredo nunca entra no git (`CLAUDE.md`
+§5.3). `alter role worker_service password '...'` é passo manual contra o
+ambiente remoto, documentado junto dos outros segredos que vivem fora do
+repo em [ADR 0006](0006-supabase-manual-setup.md).
+
+Cenários pgTAP em `supabase/tests/06_worker_service.sql`: os três grants
+funcionam (controle positivo), `photo_faces` sem `update`/`delete` para
+este role, `trg_forbid_minor_faces` continua bloqueando o conteúdo mesmo
+com `bypassrls` e grant de `insert`, e as oito tabelas negadas continuam
+inalcançáveis tanto para leitura quanto para escrita.

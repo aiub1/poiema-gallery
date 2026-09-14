@@ -61,12 +61,18 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
 (URL assinada de leitura, `delete_objects`). Decisões em [ADR
 0011](adr/0011-worker-service-role.md).
 
-> ⚠️ **Pendência bloqueante:** o worker usa um role Postgres restrito
-> (`worker_service`, `bypassrls`, grants só em
+> ✅ **Pendência antes bloqueante, fechada:** o worker usa um role Postgres
+> restrito (`worker_service`, `bypassrls`, grants só em
 > `photos`/`photo_faces`/`jobs` — ADR 0011), não `service_role`. A migration
-> que cria esse role **ainda não existe** em `supabase/migrations/` — é a
-> **próxima tarefa**, não um item de backlog. Sem ela, `go run
-> ./cmd/worker` não tem para onde conectar (`worker/README.md`).
+> `20260914023701_worker_service_role.sql` (branch
+> `feat/worker-service-role`) cria o role e os grants; 25 novos cenários
+> pgTAP em `06_worker_service.sql` (106 no total, todos verdes). Falta só
+> um passo manual fora do repo: a senha do role no ambiente remoto, via
+> `alter role worker_service password '...'` — documentado junto dos
+> outros segredos manuais em [ADR 0006](adr/0006-supabase-manual-setup.md).
+> Sem essa senha em `WORKER_DATABASE_URL`, `go run ./cmd/worker` ainda não
+> conecta em produção, mas o bloqueio de schema (`supabase/`) está
+> resolvido.
 
 ---
 
@@ -150,7 +156,14 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
     `create temp table ... on commit drop` como `ARQUITETURA.md` §5.4
     documentava originalmente — motivo em ADR 0009 (a versão com tabela
     temporária quebrava numa segunda chamada dentro da mesma transação).
-- 81 testes pgTAP, passando localmente via `npx supabase test db`:
+- Migration `20260914023701_worker_service_role.sql`: role `worker_service`
+  (`login bypassrls`) para o worker Go — `select`/`update` em
+  `photos`/`jobs`, `insert` em `photo_faces`, `usage` em `public` e
+  `extensions`, membership em `postgres` (os dois últimos e o de schema
+  são pré-requisitos mecânicos, não ampliam o alcance do role — nota de
+  aplicação em [ADR 0011](adr/0011-worker-service-role.md)). Sem senha —
+  passo manual, [ADR 0006](adr/0006-supabase-manual-setup.md).
+- 106 testes pgTAP, passando localmente via `npx supabase test db`:
   - `00_foundation.sql` (25): um cenário por papel (admin/uploader/member/
     perfil inativo/anon), incluindo autopromoção, delete em `profiles`,
     provisionamento inativo e uploader editando sessão alheia. Ajustado na
@@ -185,6 +198,15 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
     libera a leitura da foto privada em `read photos`, admin remove o
     grant mas member/uploader (mesmo o titular) não conseguem, e a foto
     volta a ficar invisível depois da remoção.
+  - `06_worker_service.sql` (25, migration do role do worker): os três
+    grants da ADR 0011 funcionam (`select`/`update` em `photos`/`jobs`,
+    `insert` em `photo_faces`); `photo_faces` sem `update` nem `delete`
+    para este role; `trg_forbid_minor_faces` continua bloqueando o
+    conteúdo mesmo com `bypassrls` e grant de `insert` (foto com
+    `contains_minors` verdadeiro e nula); as oito tabelas negadas
+    (`profiles`, `guardians`, `minors`, `minor_consents`, `face_consents`,
+    `photo_grants`, `access_logs`, `removal_requests`) inalcançáveis tanto
+    para leitura quanto para escrita.
 - `seed.sql` com 4 perfis (um por papel, mais uma conta desativada), 1
   evento, 1 sessão, 3 fotos do uploader (`contains_minors` true/false/null),
   1 `removal_request` pendente, 1 `job` na fila, 1 menor com vínculo e
@@ -260,9 +282,11 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
   versionado.
 
 ### O que ainda **não** existe
-- A migration que cria o role `worker_service` (ADR 0011) — **bloqueante**
-  para o worker rodar de verdade, mesmo com o código implementado e
-  testado. Ver nota no início da seção "Fase 4b — Faces, worker Go" acima.
+- A senha do role `worker_service` no ambiente remoto — passo manual fora
+  do repo (`alter role ... password`), documentado em [ADR
+  0006](adr/0006-supabase-manual-setup.md). A migration que cria o role e
+  os grants já existe e está testada; sem a senha em
+  `WORKER_DATABASE_URL`, o worker ainda não conecta em produção.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
 - Apps Fly.io, projeto Supabase remoto — nada provisionado.
@@ -296,9 +320,12 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
 ## Próximo passo natural
 
 Merge de `feat/phase2-photos`, `feat/phase3-minors`, `feat/phase4a-faces`,
-`feat/phase4b-face-service` e `feat/phase4b-worker` em `develop`. Antes de
-qualquer deploy: migration criando o role `worker_service` (ADR 0011) —
-bloqueante, sem ela o worker não conecta em banco nenhum. Depois: bucket R2
-via OpenTofu (`infra/`, pendente da fase 2, `tofu apply` ainda não rodado),
-necessário para o worker assinar URLs de leitura e rodar `delete_objects`
+`feat/phase4b-face-service`, `feat/phase4b-worker` e
+`feat/worker-service-role` em `develop`. Antes de qualquer deploy: definir
+a senha do role `worker_service` no remoto e carregá-la em
+`WORKER_DATABASE_URL` via `fly secrets set` (ADR 0006) — sem isso o worker
+ainda não conecta em banco nenhum, mesmo com a migration aplicada. Depois:
+bucket R2 via OpenTofu (`infra/`, pendente da fase 2, `tofu apply` ainda
+não rodado), necessário para o worker assinar URLs de leitura e rodar
+`delete_objects`
 de verdade.
