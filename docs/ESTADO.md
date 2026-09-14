@@ -47,8 +47,32 @@ de `read photos` — decisões registradas em [ADR
 `services/face/`: `/detect`, `/embed`, `/health`, `/metrics`, auth por
 `X-Service-Token`, modelo empacotado na imagem Docker (não baixado em
 runtime) — decisões registradas em [ADR
-0010](adr/0010-face-service-implementation.md). Worker Go (também fase 4b)
-ainda não começou.
+0010](adr/0010-face-service-implementation.md).
+
+**Fase 4b — Faces, worker Go: ✅ implementada localmente**, branch
+`feat/phase4b-worker`, aguardando revisão e merge em `develop`.
+`worker/cmd/worker`, `worker/internal/{jobs,faces,storage}` — claim de job
+(`FOR UPDATE SKIP LOCKED` + lease de 10 min para job travado por worker
+morto), retry exponencial (máx. 5 tentativas), os três tipos de job
+(`index_faces` completo; `delete_objects` completo no código, sem efeito
+até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
+`skipped`, implementação real pendente de revisão jurídica —
+`ARQUITETURA.md` §12), cliente HTTP do serviço facial, cliente R2
+(URL assinada de leitura, `delete_objects`). Decisões em [ADR
+0011](adr/0011-worker-service-role.md).
+
+> ✅ **Pendência antes bloqueante, fechada:** o worker usa um role Postgres
+> restrito (`worker_service`, `bypassrls`, grants só em
+> `photos`/`photo_faces`/`jobs` — ADR 0011), não `service_role`. A migration
+> `20260914023701_worker_service_role.sql` (branch
+> `feat/worker-service-role`) cria o role e os grants; 25 novos cenários
+> pgTAP em `06_worker_service.sql` (106 no total, todos verdes). Falta só
+> um passo manual fora do repo: a senha do role no ambiente remoto, via
+> `alter role worker_service password '...'` — documentado junto dos
+> outros segredos manuais em [ADR 0006](adr/0006-supabase-manual-setup.md).
+> Sem essa senha em `WORKER_DATABASE_URL`, `go run ./cmd/worker` ainda não
+> conecta em produção, mas o bloqueio de schema (`supabase/`) está
+> resolvido.
 
 ---
 
@@ -132,7 +156,14 @@ ainda não começou.
     `create temp table ... on commit drop` como `ARQUITETURA.md` §5.4
     documentava originalmente — motivo em ADR 0009 (a versão com tabela
     temporária quebrava numa segunda chamada dentro da mesma transação).
-- 81 testes pgTAP, passando localmente via `npx supabase test db`:
+- Migration `20260914023701_worker_service_role.sql`: role `worker_service`
+  (`login bypassrls`) para o worker Go — `select`/`update` em
+  `photos`/`jobs`, `insert` em `photo_faces`, `usage` em `public` e
+  `extensions`, membership em `postgres` (os dois últimos e o de schema
+  são pré-requisitos mecânicos, não ampliam o alcance do role — nota de
+  aplicação em [ADR 0011](adr/0011-worker-service-role.md)). Sem senha —
+  passo manual, [ADR 0006](adr/0006-supabase-manual-setup.md).
+- 106 testes pgTAP, passando localmente via `npx supabase test db`:
   - `00_foundation.sql` (25): um cenário por papel (admin/uploader/member/
     perfil inativo/anon), incluindo autopromoção, delete em `profiles`,
     provisionamento inativo e uploader editando sessão alheia. Ajustado na
@@ -167,6 +198,15 @@ ainda não começou.
     libera a leitura da foto privada em `read photos`, admin remove o
     grant mas member/uploader (mesmo o titular) não conseguem, e a foto
     volta a ficar invisível depois da remoção.
+  - `06_worker_service.sql` (25, migration do role do worker): os três
+    grants da ADR 0011 funcionam (`select`/`update` em `photos`/`jobs`,
+    `insert` em `photo_faces`); `photo_faces` sem `update` nem `delete`
+    para este role; `trg_forbid_minor_faces` continua bloqueando o
+    conteúdo mesmo com `bypassrls` e grant de `insert` (foto com
+    `contains_minors` verdadeiro e nula); as oito tabelas negadas
+    (`profiles`, `guardians`, `minors`, `minor_consents`, `face_consents`,
+    `photo_grants`, `access_logs`, `removal_requests`) inalcançáveis tanto
+    para leitura quanto para escrita.
 - `seed.sql` com 4 perfis (um por papel, mais uma conta desativada), 1
   evento, 1 sessão, 3 fotos do uploader (`contains_minors` true/false/null),
   1 `removal_request` pendente, 1 `job` na fila, 1 menor com vínculo e
@@ -220,8 +260,10 @@ ainda não começou.
 - Job `face-service`: roda de verdade agora que
   `services/face/requirements.txt` existe — `ruff check .`, `mypy main.py`,
   `pytest`.
-- Jobs `worker`, `infra`: existem no workflow mas ficam no-op (guardados
-  por `hashFiles`) até `worker/go.mod` e `infra/*.tf` existirem.
+- Job `worker`: roda de verdade agora que `worker/go.mod` existe —
+  `go build`, `go vet`, `gofmt -l` e `go test`, sem guarda de `hashFiles`.
+- Job `infra`: existe no workflow mas fica no-op (guardado por `hashFiles`)
+  até `infra/*.tf` ter arquivos versionados no branch em avaliação.
 - Job `deploy` (branch `main`): esqueleto com TODOs, sem credenciais
   configuradas ainda.
 
@@ -240,10 +282,11 @@ ainda não começou.
   versionado.
 
 ### O que ainda **não** existe
-- Qualquer código em `worker/` (fase 4b) — o consumo real de
-  `search_faces`/`photo_faces` pelo worker Go, incluindo a chamada real a
-  `services/face` a partir do job `index_faces`. `services/face/` já existe
-  (ver seção acima); banco da fase 4a já existe, implementado localmente.
+- A senha do role `worker_service` no ambiente remoto — passo manual fora
+  do repo (`alter role ... password`), documentado em [ADR
+  0006](adr/0006-supabase-manual-setup.md). A migration que cria o role e
+  os grants já existe e está testada; sem a senha em
+  `WORKER_DATABASE_URL`, o worker ainda não conecta em produção.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
 - Apps Fly.io, projeto Supabase remoto — nada provisionado.
@@ -263,18 +306,26 @@ ainda não começou.
 
 - Stack Supabase validado via Docker (`npx supabase start`), mas **parado**
   no momento — não fica rodando entre sessões.
-- Sem Go nem OpenTofu instalados neste ambiente (não bloqueia a Fase 1, vai
-  bloquear a Fase 2/4 quando `worker/` e `infra/` ganharem código). Sem
-  `pip`/`venv` de sistema neste ambiente — `services/face/` foi validado
-  (`ruff`, `mypy`, `pytest`) rodando dentro de um container
-  `python:3.12-slim` via Docker, não em venv local.
+- Go 1.23.12 instalado localmente em `~/go1.23.12` (tarball oficial, sem
+  `sudo` disponível neste ambiente — não em `/usr/local`); `worker/go.mod`
+  fixa `go 1.23.12`. `go build`, `go vet`, `gofmt -l` e `go test ./...`
+  validados localmente. OpenTofu segue não instalado (bloqueia `infra/`
+  quando ganhar código de verdade). Sem `pip`/`venv` de sistema neste
+  ambiente — `services/face/` foi validado (`ruff`, `mypy`, `pytest`)
+  rodando dentro de um container `python:3.12-slim` via Docker, não em venv
+  local.
 
 ---
 
 ## Próximo passo natural
 
-Merge de `feat/phase2-photos`, `feat/phase3-minors`, `feat/phase4a-faces` e
-`feat/phase4b-face-service` em `develop`, depois bucket R2 via OpenTofu
-(`infra/`, pendente da fase 2, `tofu apply` ainda não rodado) e o restante
-da Fase 4b — worker Go consumindo `search_faces`/`photo_faces` e chamando
-`services/face` de verdade (`ARQUITETURA.md` §13).
+Merge de `feat/phase2-photos`, `feat/phase3-minors`, `feat/phase4a-faces`,
+`feat/phase4b-face-service`, `feat/phase4b-worker` e
+`feat/worker-service-role` em `develop`. Antes de qualquer deploy: definir
+a senha do role `worker_service` no remoto e carregá-la em
+`WORKER_DATABASE_URL` via `fly secrets set` (ADR 0006) — sem isso o worker
+ainda não conecta em banco nenhum, mesmo com a migration aplicada. Depois:
+bucket R2 via OpenTofu (`infra/`, pendente da fase 2, `tofu apply` ainda
+não rodado), necessário para o worker assinar URLs de leitura e rodar
+`delete_objects`
+de verdade.

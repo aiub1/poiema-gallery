@@ -74,6 +74,26 @@ that intentionally never enters Tofu state or version control:
   inside a state file that itself lives in R2 is a needless circularity
   (also noted in `infra/README.md`).
 
+### `worker_service` role password
+
+Covered in detail in [ADR 0011](0011-worker-service-role.md), summarized
+here for the same reason as the R2 credential: the migration
+`20260914023701_worker_service_role.sql` creates the role `worker_service`
+**without** a password (`create role worker_service login bypassrls;`) —
+a real password never enters a migration file, which is version-controlled
+and readable by anyone with repo access.
+
+- Set by hand against the remote, once, with
+  `alter role worker_service password '...';` run as `postgres` in the SQL
+  editor (same access path as the first-admin bootstrap above).
+- Goes straight to Fly secrets as `WORKER_DATABASE_URL` (the full
+  connection string, password included) on the worker deployment. Never a
+  `.tfvars`, never a `.env`, never inside the Tofu state — same reasoning
+  as the R2 credential.
+- Locally, `supabase/tests/06_worker_service.sql` never needs a password:
+  pgTAP exercises the role via `set local role worker_service`, which the
+  migration enables by granting `worker_service` to `postgres`.
+
 ## What is still pending
 
 Nothing below has been done — there is no remote Supabase project and no R2
@@ -89,6 +109,10 @@ completed setup log:
 - Run the first-admin `update` statement above, once a real user exists.
 - Migrate the Tofu backend to R2-hosted state (`infra/README.md`, and see
   ADR 0007 for why the state bucket is separate from the photos bucket).
+- Set the `worker_service` role password on the remote
+  (`alter role worker_service password '...';`) and load it into
+  `WORKER_DATABASE_URL` via `fly secrets set` — the migration that creates
+  the role exists now, but it deliberately ships without a password.
 
 ## Consequences
 

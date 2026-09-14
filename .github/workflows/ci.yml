@@ -4,10 +4,11 @@ name: CI
 #   pull_request → supabase start · db reset · test db · go test · pytest · tofu validate
 #   main         → migrations no remoto · deploy Fly.io · smoke test
 #
-# worker/, services/face/ e infra/ ainda não têm código (fases 2-4 do roadmap,
-# ARQUITETURA.md §13); os steps abaixo checam hashFiles antes de rodar para que
-# o pipeline fique verde desde a Fase 1 e passe a validar cada parte assim que
-# ela ganhar código, sem precisar editar este arquivo de novo.
+# services/face/ e infra/ ainda não têm código sempre presente em todo PR
+# (fases 2/4 do roadmap, ARQUITETURA.md §13); os steps desses jobs checam
+# hashFiles antes de rodar para que o pipeline fique verde mesmo nas fases
+# anteriores. O job worker roda de verdade desde a fase 4b (worker/go.mod
+# existe) — sem guarda de hashFiles.
 
 on:
   pull_request:
@@ -72,15 +73,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: check for go.mod
-        id: check
-        run: echo "exists=$([ -f worker/go.mod ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
-        if: steps.check.outputs.exists == 'true'
         with:
           go-version-file: worker/go.mod
+      - name: go build
+        working-directory: worker
+        run: go build ./...
+      - name: go vet
+        working-directory: worker
+        run: go vet ./...
+      - name: gofmt
+        working-directory: worker
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "arquivos fora do padrão gofmt:"
+            echo "$fmt_out"
+            exit 1
+          fi
       - name: go test
-        if: steps.check.outputs.exists == 'true'
         working-directory: worker
         run: go test ./...
 

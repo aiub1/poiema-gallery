@@ -1,6 +1,6 @@
 # Arquitetura — galeria-core
 
-Versão 1.5 · Banco, worker e serviço facial. Documento vivo.
+Versão 1.6 · Banco, worker e serviço facial. Documento vivo.
 Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
 
 > **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
@@ -52,6 +52,20 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
 > este parágrafo (§11) descreve exportação OTel *push*, que é outra coisa
 > (lacuna registrada em decisão 5). Worker Go consumindo o serviço ainda
 > não entrou — só o serviço Python nesta fase.
+
+> **Mudanças da 1.5 para a 1.6** (fase 4b, worker — [ADR
+> 0011](adr/0011-worker-service-role.md)) — `worker/` implementado: claim
+> com `FOR UPDATE SKIP LOCKED` + lease de 10 min (job travado por worker
+> morto no meio do processamento volta a ficar elegível, não fica preso
+> para sempre — §6 original não cobria esse caso), retry exponencial até 5
+> tentativas, os três tipos de job (`index_faces` completo,
+> `delete_objects` completo no código sem bucket R2 ainda para testar de
+> verdade, `purge_expired_embeddings` reconhecido mas marcado `skipped` —
+> regra de retenção pendente de revisão jurídica do checklist LGPD, §12);
+> conecta como role `worker_service` (`bypassrls`, grants restritos a
+> `photos`/`photo_faces`/`jobs`), não `service_role` — decisão nova, não
+> estava especificada antes (ADR 0011). Migration do role ainda não existe;
+> worker não conecta em banco real até ela entrar.
 
 ---
 
@@ -742,26 +756,35 @@ resolução de nomes dentro da função.
 ## 6. Worker (Go)
 
 Processo único, polling a cada 5 s, `FOR UPDATE SKIP LOCKED` para permitir mais
-de uma instância sem duplicar trabalho.
+de uma instância sem duplicar trabalho. Implementado em `worker/` — decisões
+em [ADR 0011](adr/0011-worker-service-role.md), detalhes em
+`worker/README.md`.
 
 ```go
-// pseudocódigo do laço principal
-job := claimJob()                      // SELECT ... FOR UPDATE SKIP LOCKED
+// pseudocódigo do laço principal — implementação real em
+// worker/internal/jobs/runner.go
+job := claimJob()                      // UPDATE ... FOR UPDATE SKIP LOCKED,
+                                        // reivindica também job "processing"
+                                        // com lease expirado (10 min —
+                                        // worker morto no meio do job)
 switch job.Type {
 case "index_faces":
     photo := loadPhoto(job.PhotoID)
     if photo.ContainsMinors == nil || *photo.ContainsMinors {
-        markSkipped(photo)             // PRIMEIRA TRAVA — nunca chama o serviço
+        markSkipped(photo)             // PRIMEIRA TRAVA — nunca chama o serviço,
+                                        // nem assina a URL de leitura
         return
     }
-    url   := signedReadURL(photo.StorageKey, 10*time.Minute)
+    url   := signedReadURL(photo.StorageKey, 15*time.Minute)  // §8
     faces := faceService.Detect(url)
     saveFaces(photo.ID, faces)         // trigger é a segunda trava
     markIndexed(photo)
 case "delete_objects":
     deleteFromR2(job.Keys)
 case "purge_expired_embeddings":
-    purgeOlderThan(retentionWindow)
+    return errNotImplemented           // marcado "skipped", não "failed" —
+                                        // regra de retenção pendente de
+                                        // revisão jurídica, §12
 }
 ```
 
@@ -769,8 +792,16 @@ Retry exponencial, máximo 5 tentativas, depois `failed` com `last_error`.
 Jobs de tipos diferentes: `index_faces`, `delete_objects`,
 `purge_expired_embeddings`.
 
+Conecta como role Postgres `worker_service` (`bypassrls`, grants restritos a
+`photos`/`photo_faces`/`jobs`) — não `service_role`. Motivo: o worker roda
+em loop sem supervisão humana por requisição, categoria de risco diferente
+de uma rota de servidor do galeria-web (ADR 0011). Migration do role ainda
+não existe — bloqueante, ver `docs/ESTADO.md`.
+
 Métricas expostas em `/metrics` (Prometheus): fila pendente, duração por job,
-taxa de falha.
+taxa de falha. **Ainda não implementado** — adiado para a Fase 5
+("Acabamento", §13), junto da mesma lacuna já registrada para
+`services/face` (ADR 0010, decisão 5: nenhum scraper configurado).
 
 ---
 
@@ -909,8 +940,12 @@ worker Go ainda não entraram** — só banco nesta etapa.
   #8](https://github.com/aiub1/poiema-gallery/pull/8)), aguardando
   revisão e merge em `develop`. `services/face/` — decisões em [ADR
   0010](adr/0010-face-service-implementation.md).
-- **Worker Go: não começou.** Consumo real de `search_faces` e
-  `photo_faces` pelo worker Go, chamando o serviço acima.
+- **Worker Go: ✅ implementado localmente**, branch `feat/phase4b-worker`,
+  aguardando revisão e merge em `develop`. Consome `jobs`, chama
+  `services/face`, grava em `photo_faces` — decisões em [ADR
+  0011](adr/0011-worker-service-role.md). **Bloqueado para rodar de
+  verdade**: a migration do role `worker_service` (grants restritos, sem
+  `service_role`) ainda não existe — próxima tarefa, ver `docs/ESTADO.md`.
 
 **Fase 5 — Acabamento.** Retenção automática, métricas, calibração do limiar.
 
