@@ -47,7 +47,8 @@ de `read photos` — decisões registradas em [ADR
 `services/face/`: `/detect`, `/embed`, `/health`, `/metrics`, auth por
 `X-Service-Token`, modelo empacotado na imagem Docker (não baixado em
 runtime) — decisões registradas em [ADR
-0010](adr/0010-face-service-implementation.md).
+0010](adr/0010-face-service-implementation.md). `fly.toml` versionado
+(`services/face/fly.toml`, app `poiema-gallery-face`).
 
 **Fase 4b — Faces, worker Go: ✅ implementada localmente**, branch
 `feat/phase4b-worker`, aguardando revisão e merge em `develop`.
@@ -59,7 +60,8 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
 `skipped`, implementação real pendente de revisão jurídica —
 `ARQUITETURA.md` §12), cliente HTTP do serviço facial, cliente R2
 (URL assinada de leitura, `delete_objects`). Decisões em [ADR
-0011](adr/0011-worker-service-role.md).
+0011](adr/0011-worker-service-role.md). `Dockerfile` e `fly.toml`
+versionados (app `poiema-gallery-workerr`).
 
 > ✅ **Pendência antes bloqueante, fechada:** o worker usa um role Postgres
 > restrito (`worker_service`, `bypassrls`, grants só em
@@ -289,7 +291,9 @@ até o bucket R2 existir; `purge_expired_embeddings` reconhecido e marcado
   `WORKER_DATABASE_URL`, o worker ainda não conecta em produção.
 - Bucket R2 via OpenTofu para a fase 2 — não entrou nesta migration, fora do
   escopo tratado.
-- Apps Fly.io, projeto Supabase remoto — nada provisionado.
+- Apps Fly.io, projeto Supabase remoto — nada provisionado. `fly.toml` de
+  `services/face/` e `worker/` já versionados, mas `fly apps create`/`fly
+  deploy` ainda não rodaram.
 - Bucket R2: código em `infra/` (branch `feat/infra-r2-bucket`,
   `cloudflare_r2_bucket` fixado em provider `4.52.9`/Tofu `1.12.6`,
   `tofu validate` limpo), mas **`tofu apply` não foi rodado** — nada
