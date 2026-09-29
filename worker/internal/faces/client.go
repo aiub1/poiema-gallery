@@ -43,12 +43,19 @@ type Client struct {
 	HTTPClient   *http.Client
 }
 
-func NewClient(baseURL, serviceToken string) *Client {
+// DefaultTimeout cobre o cold start do serviço facial no Fly (auto-stop
+// habilitado, fly.toml) mais o carregamento do modelo e a chamada em si.
+const DefaultTimeout = 60 * time.Second
+
+func NewClient(baseURL, serviceToken string, timeout time.Duration) *Client {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
 	return &Client{
 		BaseURL:      baseURL,
 		ServiceToken: serviceToken,
 		MinQuality:   0.5,
-		HTTPClient:   &http.Client{Timeout: 30 * time.Second},
+		HTTPClient:   &http.Client{Timeout: timeout},
 	}
 }
 

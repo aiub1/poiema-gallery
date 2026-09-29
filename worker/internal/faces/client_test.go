@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestClient_Detect_SendsTokenAndParsesResponse(t *testing.T) {
@@ -24,7 +25,7 @@ func TestClient_Detect_SendsTokenAndParsesResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "dev-token")
+	client := NewClient(server.URL, "dev-token", time.Second)
 	faces, err := client.Detect(context.Background(), "https://example.invalid/signed")
 	if err != nil {
 		t.Fatalf("Detect retornou erro: %v", err)
@@ -47,9 +48,23 @@ func TestClient_Detect_NonOKStatusIsError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "dev-token")
+	client := NewClient(server.URL, "dev-token", time.Second)
 	_, err := client.Detect(context.Background(), "https://example.invalid/signed")
 	if err == nil {
 		t.Fatal("esperava erro para status 401, recebeu nil")
+	}
+}
+
+func TestNewClient_DefaultsTimeoutWhenUnset(t *testing.T) {
+	client := NewClient("https://example.invalid", "dev-token", 0)
+	if client.HTTPClient.Timeout != DefaultTimeout {
+		t.Errorf("Timeout = %s, esperado o padrão %s", client.HTTPClient.Timeout, DefaultTimeout)
+	}
+}
+
+func TestNewClient_UsesGivenTimeout(t *testing.T) {
+	client := NewClient("https://example.invalid", "dev-token", 90*time.Second)
+	if client.HTTPClient.Timeout != 90*time.Second {
+		t.Errorf("Timeout = %s, esperado 90s", client.HTTPClient.Timeout)
 	}
 }
