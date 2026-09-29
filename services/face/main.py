@@ -40,6 +40,7 @@ class Settings:
     model_root: str
     det_size: int
     max_upload_bytes: int
+    face_max_side: int
 
 
 def get_settings() -> Settings:
@@ -51,6 +52,7 @@ def get_settings() -> Settings:
         model_root=os.environ.get("FACE_MODEL_ROOT", "/opt/insightface/models"),
         det_size=int(os.environ.get("FACE_DET_SIZE", "640")),
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024))),
+        face_max_side=int(os.environ.get("FACE_MAX_SIDE", "1600")),
     )
 
 
@@ -103,7 +105,15 @@ def _build_face_app(settings: Settings) -> Any:
     # app.dependency_overrides e nunca chegam aqui.
     from insightface.app import FaceAnalysis
 
-    face_app = FaceAnalysis(name="buffalo_l", root=settings.model_root)
+    # Só usamos detecção e reconhecimento. Os demais modelos do pacote
+    # buffalo_l (landmarks 2D/3D, gênero/idade) rodam por rosto e custam
+    # tempo e memória à toa — e produziriam inferências sobre a pessoa que
+    # este sistema não usa e não pode guardar (CLAUDE.md §5.2).
+    face_app = FaceAnalysis(
+        name="buffalo_l",
+        root=settings.model_root,
+        allowed_modules=["detection", "recognition"],
+    )
     face_app.prepare(ctx_id=-1, det_size=(settings.det_size, settings.det_size))
     return face_app
 
@@ -132,8 +142,23 @@ def decode_image(data: bytes) -> npt.NDArray[np.uint8]:
     return image.astype(np.uint8)
 
 
-def _bbox_from_array(bbox: npt.NDArray[np.float32]) -> BBox:
-    x1, y1, x2, y2 = (float(v) for v in bbox)
+def downscale(
+    image: npt.NDArray[np.uint8], max_side: int
+) -> tuple[npt.NDArray[np.uint8], float]:
+    height, width = image.shape[:2]
+    scale = min(1.0, max_side / max(height, width))
+    if scale >= 1.0:
+        return image, 1.0
+    resized = cv2.resize(
+        image,
+        (round(width * scale), round(height * scale)),
+        interpolation=cv2.INTER_AREA,
+    )
+    return resized.astype(np.uint8), scale
+
+
+def _bbox_from_array(bbox: npt.NDArray[np.float32], scale: float = 1.0) -> BBox:
+    x1, y1, x2, y2 = (float(v) / scale for v in bbox)
     return BBox(x=x1, y=y1, w=x2 - x1, h=y2 - y1)
 
 
@@ -164,13 +189,15 @@ async def metrics() -> Response:
 
 @app.post("/detect", response_model=DetectResponse, dependencies=[Depends(require_service_token)])
 async def detect(payload: DetectRequest, face_app: Any = Depends(get_face_app)) -> DetectResponse:
+    settings = get_settings()
     image_bytes = await _fetch_image(str(payload.image_url))
     image = decode_image(image_bytes)
+    image, scale = downscale(image, settings.face_max_side)
     faces = face_app.get(image)
     detected = [
         Face(
             embedding=face.normed_embedding.tolist(),
-            bbox=_bbox_from_array(face.bbox),
+            bbox=_bbox_from_array(face.bbox, scale),
             quality=float(face.det_score),
         )
         for face in faces
@@ -217,6 +244,7 @@ async def embed(request: Request, face_app: Any = Depends(get_face_app)) -> Embe
 
     data = await upload.read()
     image = decode_image(data)
+    image, _scale = downscale(image, settings.face_max_side)
     faces = face_app.get(image)
     if not faces:
         raise HTTPException(
