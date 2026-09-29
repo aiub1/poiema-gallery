@@ -1,0 +1,184 @@
+name: CI
+
+# docs/ARQUITETURA.md §10
+#   pull_request → supabase start · db reset · test db · go test · pytest · tofu validate
+#   push (master) → gatilha .github/workflows/deploy.yml (não este arquivo)
+#
+# develop = integração (destino usual de PR de feature); master = produção
+# (só recebe PR de release develop → master). Ver ADR 0012.
+#
+# infra/ ainda não tem `.tf` versionado em todo branch (fase do roadmap,
+# ARQUITETURA.md §13); o job infra checa hashFiles antes de rodar para que
+# o pipeline fique verde mesmo antes de existir. worker e face-service
+# usam o job `changes` (dorny/paths-filter) para só rodar quando a pasta
+# correspondente mudou — o job continua reportando (como "skipped", que
+# GitHub Actions conta como sucesso para status check obrigatório) em vez
+# de nunca rodar, então não trava merge de PR que não tocou a pasta.
+
+on:
+  pull_request:
+    branches: [develop, master]
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [master]
+
+jobs:
+  changes:
+    name: Detecta pastas alteradas
+    runs-on: ubuntu-latest
+    outputs:
+      worker: ${{ steps.filter.outputs.worker }}
+      face: ${{ steps.filter.outputs.face }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        id: filter
+        with:
+          filters: |
+            worker:
+              - 'worker/**'
+            face:
+              - 'services/face/**'
+
+  pr-title:
+    name: Título do PR (Conventional Commits)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            chore
+            ci
+            build
+            revert
+          scopes: |
+            db
+            worker
+            face
+            infra
+            ci
+            docs
+            deps
+            repo
+          requireScope: true
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: "o assunto deve começar com minúscula (CONTRIBUTING.md)"
+
+  database:
+    name: Banco (Supabase + pgTAP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: supabase start
+        run: npx supabase start
+      - name: supabase db reset
+        run: npx supabase db reset
+      - name: pgTAP
+        run: npx supabase test db
+
+  worker:
+    name: Worker (Go)
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: worker/go.mod
+      - name: go build
+        working-directory: worker
+        run: go build ./...
+      - name: go vet
+        working-directory: worker
+        run: go vet ./...
+      - name: gofmt
+        working-directory: worker
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "arquivos fora do padrão gofmt:"
+            echo "$fmt_out"
+            exit 1
+          fi
+      - name: go test
+        working-directory: worker
+        run: go test ./...
+
+  face-service:
+    name: Serviço facial (Python)
+    needs: changes
+    if: needs.changes.outputs.face == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12" # mesma versão do services/face/Dockerfile
+      - name: install deps
+        working-directory: services/face
+        run: pip install -r requirements-dev.txt
+      - name: ruff
+        working-directory: services/face
+        run: ruff check .
+      - name: mypy
+        working-directory: services/face
+        run: mypy main.py
+      - name: pytest
+        working-directory: services/face
+        # não baixa o modelo real: os testes sobrescrevem get_face_app
+        # (app.dependency_overrides) via tests/conftest.py
+        run: pytest
+
+  infra:
+    name: Infra (OpenTofu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check for tofu files
+        id: check
+        run: echo "exists=$(compgen -G 'infra/*.tf' > /dev/null && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: opentofu/setup-opentofu@v1
+        if: steps.check.outputs.exists == 'true'
+      - name: tofu validate
+        if: steps.check.outputs.exists == 'true'
+        working-directory: infra
+        run: |
+          tofu init -backend=false
+          tofu validate
+
+  # O deploy nos apps Fly (face/worker) mudou para .github/workflows/deploy.yml
+  # (ADR 0012) — fora de escopo desta mudança tocar na lógica de migration em
+  # si, então o push das migrations continua aqui, só com o gatilho corrigido
+  # de `main` (nunca existiu) para `master`.
+  migrations:
+    name: Migrations no remoto (Supabase)
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    needs: [database, infra]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: supabase db push
+        run: npx supabase db push
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}

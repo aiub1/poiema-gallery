@@ -143,6 +143,20 @@ vite.config.ts.timestamp-*
 .vite/
 
 .nvmrc
-claude.md
-.claude
-/claude
+
+# OpenTofu (infra/)
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+crash.log
+
+# Python (services/face/)
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and fill in real values. terraform.tfvars is
+# gitignored — never commit it.
+
+account_id     = "0000000000000000000000000000000"
+r2_bucket_name = "poiema-gallery"
+r2_location    = "ENAM" # pick the region closest to your users

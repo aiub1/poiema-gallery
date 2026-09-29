@@ -5,8 +5,7 @@
   "engines": {
     "node": "24.19.0"
   },
-
-  "description": "Web portal for searching, download and uploading photos. At a first moment to churchs and cristhian teamples.",
+  "description": "Database, indexing worker and face recognition service for the church photo gallery.",
   "homepage": "https://github.com/aiub1/poiema-gallery#readme",
   "bugs": {
     "url": "https://github.com/aiub1/poiema-gallery/issues"
@@ -18,8 +17,18 @@
   "license": "ISC",
   "author": "João Aiub <Aiub1,joaoribeiroaiub@gmail.com>, Rafael Souza <raphsouza_,r.souza1996@live.com>",
   "type": "commonjs",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "db:start": "npx supabase start",
+    "db:stop": "npx supabase stop",
+    "db:reset": "npx supabase db reset",
+    "db:push": "npx supabase db push",
+    "test": "npx supabase test db",
+    "types:gen": "npx supabase gen types typescript --local > ../galeria-web/lib/database.types.ts",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
+    "husky": "^9.1.7"
   }
 }
