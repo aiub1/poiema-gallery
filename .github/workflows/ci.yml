@@ -2,21 +2,44 @@ name: CI
 
 # docs/ARQUITETURA.md §10
 #   pull_request → supabase start · db reset · test db · go test · pytest · tofu validate
-#   main         → migrations no remoto · deploy Fly.io · smoke test
+#   push (master) → gatilha .github/workflows/deploy.yml (não este arquivo)
 #
-# services/face/ e infra/ ainda não têm código sempre presente em todo PR
-# (fases 2/4 do roadmap, ARQUITETURA.md §13); os steps desses jobs checam
-# hashFiles antes de rodar para que o pipeline fique verde mesmo nas fases
-# anteriores. O job worker roda de verdade desde a fase 4b (worker/go.mod
-# existe) — sem guarda de hashFiles.
+# develop = integração (destino usual de PR de feature); master = produção
+# (só recebe PR de release develop → master). Ver ADR 0012.
+#
+# infra/ ainda não tem `.tf` versionado em todo branch (fase do roadmap,
+# ARQUITETURA.md §13); o job infra checa hashFiles antes de rodar para que
+# o pipeline fique verde mesmo antes de existir. worker e face-service
+# usam o job `changes` (dorny/paths-filter) para só rodar quando a pasta
+# correspondente mudou — o job continua reportando (como "skipped", que
+# GitHub Actions conta como sucesso para status check obrigatório) em vez
+# de nunca rodar, então não trava merge de PR que não tocou a pasta.
 
 on:
   pull_request:
+    branches: [develop, master]
     types: [opened, edited, synchronize, reopened]
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
+  changes:
+    name: Detecta pastas alteradas
+    runs-on: ubuntu-latest
+    outputs:
+      worker: ${{ steps.filter.outputs.worker }}
+      face: ${{ steps.filter.outputs.face }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        id: filter
+        with:
+          filters: |
+            worker:
+              - 'worker/**'
+            face:
+              - 'services/face/**'
+
   pr-title:
     name: Título do PR (Conventional Commits)
     if: github.event_name == 'pull_request'
@@ -70,10 +93,12 @@ jobs:
 
   worker:
     name: Worker (Go)
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: worker/go.mod
       - name: go build
@@ -97,31 +122,27 @@ jobs:
 
   face-service:
     name: Serviço facial (Python)
+    needs: changes
+    if: needs.changes.outputs.face == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: check for requirements
-        id: check
-        run: echo "exists=$([ -f services/face/requirements.txt ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-python@v5
-        if: steps.check.outputs.exists == 'true'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          python-version: "3.12" # mesma versão do services/face/Dockerfile
       - name: install deps
-        if: steps.check.outputs.exists == 'true'
         working-directory: services/face
         run: pip install -r requirements-dev.txt
       - name: ruff
-        if: steps.check.outputs.exists == 'true'
         working-directory: services/face
         run: ruff check .
       - name: mypy
-        if: steps.check.outputs.exists == 'true'
         working-directory: services/face
         run: mypy main.py
       - name: pytest
-        if: steps.check.outputs.exists == 'true'
         working-directory: services/face
+        # não baixa o modelo real: os testes sobrescrevem get_face_app
+        # (app.dependency_overrides) via tests/conftest.py
         run: pytest
 
   infra:
@@ -141,26 +162,23 @@ jobs:
           tofu init -backend=false
           tofu validate
 
-  deploy:
-    name: Deploy (main)
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [database, worker, face-service, infra]
+  # O deploy nos apps Fly (face/worker) mudou para .github/workflows/deploy.yml
+  # (ADR 0012) — fora de escopo desta mudança tocar na lógica de migration em
+  # si, então o push das migrations continua aqui, só com o gatilho corrigido
+  # de `main` (nunca existiu) para `master`.
+  migrations:
+    name: Migrations no remoto (Supabase)
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    needs: [database, infra]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: check for fly apps
-        id: check
-        run: echo "exists=$(compgen -G 'infra/*.tf' > /dev/null && echo true || echo false)" >> "$GITHUB_OUTPUT"
-      - name: migrations no remoto
-        if: steps.check.outputs.exists == 'true'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: supabase db push
         run: npx supabase db push
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
-      - name: deploy Fly.io
-        if: steps.check.outputs.exists == 'true'
-        run: echo "TODO — habilitar quando worker/ e services/face/ tiverem Dockerfile (Fase 4, ARQUITETURA.md §13)"
-      - name: smoke test
-        if: steps.check.outputs.exists == 'true'
-        run: echo "TODO — checar /health do worker e do serviço facial após o deploy"
