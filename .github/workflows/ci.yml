@@ -7,6 +7,9 @@ name: CI
 # develop = integração (destino usual de PR de feature); master = produção
 # (só recebe PR de release develop → master). Ver ADR 0012.
 #
+# Push de migrations do Supabase não roda mais automaticamente aqui — é
+# .github/workflows/migrations.yml, só workflow_dispatch. Ver ADR 0013.
+#
 # infra/ ainda não tem `.tf` versionado em todo branch (fase do roadmap,
 # ARQUITETURA.md §13); o job infra checa hashFiles antes de rodar para que
 # o pipeline fique verde mesmo antes de existir. worker e face-service
@@ -161,24 +164,3 @@ jobs:
         run: |
           tofu init -backend=false
           tofu validate
-
-  # O deploy nos apps Fly (face/worker) mudou para .github/workflows/deploy.yml
-  # (ADR 0012) — fora de escopo desta mudança tocar na lógica de migration em
-  # si, então o push das migrations continua aqui, só com o gatilho corrigido
-  # de `main` (nunca existiu) para `master`.
-  migrations:
-    name: Migrations no remoto (Supabase)
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    needs: [database, infra]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - name: supabase db push
-        run: npx supabase db push
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}

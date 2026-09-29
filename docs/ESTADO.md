@@ -256,7 +256,7 @@ versionados (app `poiema-gallery-workerr`).
 - `requirements.txt`/`requirements-dev.txt`: versões fixadas. `ruff`
   (limpo) e `mypy --strict` (limpo) configurados em `pyproject.toml`.
 
-### CI/CD (`.github/workflows/`, ADR 0012)
+### CI/CD (`.github/workflows/`, ADR 0012, ADR 0013)
 - `develop` = integração (destino usual de PR); `master` = produção (só
   recebe PR de release `develop` → `master`). `ci.yml` roda em
   `pull_request` para as duas; `deploy.yml` só em `push` para `master`.
@@ -270,9 +270,9 @@ versionados (app `poiema-gallery-workerr`).
 - Job `worker`: `go build`, `go vet`, `gofmt -l` e `go test`.
 - Job `infra`: existe no workflow mas fica no-op (guardado por `hashFiles`)
   até `infra/*.tf` ter arquivos versionados no branch em avaliação.
-- Job `migrations` (push em `master`): `npx supabase db push` — mesma
-  lógica de antes, só com o gatilho corrigido de `main` (nunca existiu)
-  para `master`.
+- `migrations.yml`: workflow separado, só `workflow_dispatch` (ADR 0013) —
+  não roda em push/PR. Roda `supabase db push --dry-run` antes do `db push`
+  de verdade, para dar chance de abortar antes de escrever no banco remoto.
 - `deploy.yml`: um job por app (`deploy-face`, `deploy-worker`), cada um
   com seu próprio secret (`FLY_TOKEN_FACE`/`FLY_TOKEN_WORKER`) e seu
   `concurrency` group; dispara em `push` para `master` (só do app cuja
