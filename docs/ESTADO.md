@@ -256,18 +256,31 @@ versionados (app `poiema-gallery-workerr`).
 - `requirements.txt`/`requirements-dev.txt`: versões fixadas. `ruff`
   (limpo) e `mypy --strict` (limpo) configurados em `pyproject.toml`.
 
-### CI (`.github/workflows/ci.yml`)
+### CI/CD (`.github/workflows/`, ADR 0012)
+- `develop` = integração (destino usual de PR); `master` = produção (só
+  recebe PR de release `develop` → `master`). `ci.yml` roda em
+  `pull_request` para as duas; `deploy.yml` só em `push` para `master`.
+- `ci.yml`, job `changes`: `dorny/paths-filter` decide se `worker/` e/ou
+  `services/face/` mudaram — os jobs `worker`/`face-service` só rodam de
+  verdade nesse caso, mas sempre reportam (como `skipped` quando não se
+  aplica), para não travar branch protection.
 - Job `pr-title`: valida título do PR contra Conventional Commits.
 - Job `database`: `supabase start` → `db reset` → `test db`, roda de verdade.
-- Job `face-service`: roda de verdade agora que
-  `services/face/requirements.txt` existe — `ruff check .`, `mypy main.py`,
-  `pytest`.
-- Job `worker`: roda de verdade agora que `worker/go.mod` existe —
-  `go build`, `go vet`, `gofmt -l` e `go test`, sem guarda de `hashFiles`.
+- Job `face-service`: `ruff check .`, `mypy main.py`, `pytest`.
+- Job `worker`: `go build`, `go vet`, `gofmt -l` e `go test`.
 - Job `infra`: existe no workflow mas fica no-op (guardado por `hashFiles`)
   até `infra/*.tf` ter arquivos versionados no branch em avaliação.
-- Job `deploy` (branch `main`): esqueleto com TODOs, sem credenciais
-  configuradas ainda.
+- Job `migrations` (push em `master`): `npx supabase db push` — mesma
+  lógica de antes, só com o gatilho corrigido de `main` (nunca existiu)
+  para `master`.
+- `deploy.yml`: um job por app (`deploy-face`, `deploy-worker`), cada um
+  com seu próprio secret (`FLY_TOKEN_FACE`/`FLY_TOKEN_WORKER`) e seu
+  `concurrency` group; dispara em `push` para `master` (só do app cuja
+  pasta mudou) ou por `workflow_dispatch` manual. `flyctl deploy
+  --local-only --ha=false`. Smoke test de `/health` com retry só no
+  `deploy-face` (worker não expõe HTTP público). **Secrets ainda não
+  configurados no GitHub** — bloqueante para o primeiro deploy real via
+  Actions.
 
 ### Padrão de commits/branches/PRs
 - `CONTRIBUTING.md` documenta o padrão (Conventional Commits com escopo

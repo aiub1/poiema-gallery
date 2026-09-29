@@ -1,0 +1,89 @@
+name: Deploy
+
+# Deploy dos dois apps Fly.io (face/worker), um por vez, só do que mudou.
+# Migrations do Supabase continuam em ci.yml (job `migrations`) — fora de
+# escopo aqui. Decisões e alternativas em docs/adr/0012-ci-cd-github-actions.md.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Qual app redeployar
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - face
+          - worker
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detecta pastas alteradas
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      worker: ${{ steps.filter.outputs.worker }}
+      face: ${{ steps.filter.outputs.face }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        id: filter
+        with:
+          filters: |
+            worker:
+              - 'worker/**'
+            face:
+              - 'services/face/**'
+
+  deploy-face:
+    name: Deploy — serviço facial
+    needs: changes
+    if: always() && ((github.event_name == 'push' && needs.changes.outputs.face == 'true') || (github.event_name == 'workflow_dispatch' && (inputs.app == 'face' || inputs.app == 'both')))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-face
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+      - name: flyctl deploy
+        working-directory: services/face
+        run: flyctl deploy --local-only --ha=false -a poiema-gallery-face
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_FACE }}
+      - name: smoke test (/health)
+        run: |
+          for i in $(seq 1 10); do
+            status="$(curl -s -o /dev/null -w '%{http_code}' https://poiema-gallery-face.fly.dev/health || echo 000)"
+            if [ "$status" = "200" ]; then
+              echo "OK — /health respondeu 200"
+              exit 0
+            fi
+            echo "tentativa $i: /health respondeu $status, aguardando cold start..."
+            sleep 3
+          done
+          echo "esgotadas as tentativas — /health não respondeu 200"
+          exit 1
+
+  deploy-worker:
+    name: Deploy — worker
+    needs: changes
+    if: always() && ((github.event_name == 'push' && needs.changes.outputs.worker == 'true') || (github.event_name == 'workflow_dispatch' && (inputs.app == 'worker' || inputs.app == 'both')))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-worker
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+      - name: flyctl deploy
+        working-directory: worker
+        run: flyctl deploy --local-only --ha=false -a poiema-gallery-workerr
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_WORKER }}
