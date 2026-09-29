@@ -49,7 +49,7 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 
 	store := jobs.NewPostgresStore(pool)
-	faceClient := faces.NewClient(cfg.faceServiceURL, cfg.faceServiceToken)
+	faceClient := faces.NewClient(cfg.faceServiceURL, cfg.faceServiceToken, cfg.faceServiceTimeout)
 	objectStore := storage.NewClient(storage.Config{
 		AccountID:       cfg.r2AccountID,
 		AccessKeyID:     cfg.r2AccessKeyID,
@@ -101,24 +101,31 @@ func run(logger *slog.Logger) error {
 }
 
 type config struct {
-	databaseURL       string
-	faceServiceURL    string
-	faceServiceToken  string
-	r2AccountID       string
-	r2AccessKeyID     string
-	r2SecretAccessKey string
-	r2Bucket          string
+	databaseURL        string
+	faceServiceURL     string
+	faceServiceToken   string
+	faceServiceTimeout time.Duration
+	r2AccountID        string
+	r2AccessKeyID      string
+	r2SecretAccessKey  string
+	r2Bucket           string
 }
 
 func loadConfig() (config, error) {
+	faceServiceTimeout, err := parseDurationEnv("FACE_SERVICE_TIMEOUT", faces.DefaultTimeout)
+	if err != nil {
+		return config{}, err
+	}
+
 	cfg := config{
-		databaseURL:       os.Getenv("WORKER_DATABASE_URL"),
-		faceServiceURL:    os.Getenv("FACE_SERVICE_URL"),
-		faceServiceToken:  os.Getenv("FACE_SERVICE_TOKEN"),
-		r2AccountID:       os.Getenv("R2_ACCOUNT_ID"),
-		r2AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
-		r2SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
-		r2Bucket:          os.Getenv("R2_BUCKET"),
+		databaseURL:        os.Getenv("WORKER_DATABASE_URL"),
+		faceServiceURL:     os.Getenv("FACE_SERVICE_URL"),
+		faceServiceToken:   os.Getenv("FACE_SERVICE_TOKEN"),
+		faceServiceTimeout: faceServiceTimeout,
+		r2AccountID:        os.Getenv("R2_ACCOUNT_ID"),
+		r2AccessKeyID:      os.Getenv("R2_ACCESS_KEY_ID"),
+		r2SecretAccessKey:  os.Getenv("R2_SECRET_ACCESS_KEY"),
+		r2Bucket:           os.Getenv("R2_BUCKET"),
 	}
 
 	var missing []string
@@ -140,6 +147,20 @@ func loadConfig() (config, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseDurationEnv lê uma duração no formato do Go (ex.: "60s") da variável
+// de ambiente indicada, devolvendo def quando ela não estiver definida.
+func parseDurationEnv(name string, def time.Duration) (time.Duration, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s inválida: %w", name, err)
+	}
+	return d, nil
 }
 
 func workerID() (string, error) {
