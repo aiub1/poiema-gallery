@@ -1,6 +1,6 @@
 # Arquitetura — galeria-core
 
-Versão 1.6 · Banco, worker e serviço facial. Documento vivo.
+Versão 1.7 · Banco, worker e serviço facial. Documento vivo.
 Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado).
 
 > **Mudanças da 1.0 para a 1.1** — `is_member()` passa a controlar toda leitura
@@ -67,6 +67,13 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
 > estava especificada antes (ADR 0011). Migration do role ainda não existe;
 > worker não conecta em banco real até ela entrar.
 
+> **Mudanças da 1.6 para a 1.7** (evento público — [ADR
+> 0014](adr/0014-public-events.md)) — `events.is_public` e trigger
+> `trg_events_public_flag` (só admin muda); primeira leitura sem login, por
+> quatro funções `security definer` `public_*` sobre a regra única
+> `public_photos_of()` (§5.5). `anon` continua sem privilégio em tabela
+> alguma; as policies existentes não mudaram.
+
 ---
 
 ## 1. Visão geral
@@ -87,6 +94,10 @@ Complementar a `galeria-web/docs/ARQUITETURA.md` (repositório ainda não criado
                             │
                             └──► Cloudflare R2 (lê original)
 ```
+
+Acesso: sistema fechado. O papel `anon` não tem privilégio em **tabela** alguma;
+a única exceção de leitura são as funções `public_*` de evento público (§5.5,
+ADR 0014).
 
 **Custo alvo: R$ 0/mês.** Uso interno, gratuito, sem fins lucrativos.
 
@@ -433,7 +444,8 @@ create policy "update sessions" on sessions
 create policy "delete sessions" on sessions
   for delete to authenticated using ((select is_admin()));
 
--- Sistema fechado (CLAUDE.md §1): anon não tem privilégio em tabela alguma.
+-- Sistema fechado (CLAUDE.md §1): anon não tem privilégio em tabela alguma
+-- (a leitura pública de evento passa só pelas funções public_*, §5.5).
 -- `to authenticated` já barra o anônimo, mas depende de toda policy futura
 -- ser escrita corretamente; o revoke não depende de ninguém.
 revoke all on events   from anon;
@@ -751,6 +763,37 @@ statements que modificam dados, não uma otimização arriscada. `pg_temp` no
 uma tabela temporária do chamador ser pesquisada antes de `public` na
 resolução de nomes dentro da função.
 
+### 5.5 Leitura pública de evento (ADR 0014)
+
+`events.is_public` (default `false`) abre um evento a quem não tem login.
+`anon` segue sem privilégio em tabela; a leitura passa só por funções.
+
+**Trigger `trg_events_public_flag`** (`before insert or update on events`,
+`enforce_event_public_flag()`, security invoker): quem não é admin nem
+`postgres`/`supabase_admin`/`service_role` não cria evento já público nem muda
+`is_public` (`42501`). Necessário porque a policy `update events` deixa o
+criador (uploader) editar a própria linha.
+
+**Regra pública** — `public_photos_of(event_id)`, interna, sem `execute` para
+`anon`/`authenticated`: evento `is_public` e não excluído; foto não excluída,
+`status <> 'pending_review'`, `contains_minors is false` (nulo ou verdadeiro
+nunca é público) e `not is_private`.
+
+**Funções com `execute` para `anon`** (todas `security definer`,
+`search_path = public, pg_temp`):
+
+| Função | Devolve |
+|---|---|
+| `public_event(slug)` | id, nome, slug, descrição, data, `cover_key`, contagem de fotos públicas |
+| `public_event_sessions(slug)` | id, nome, posição, contagem de fotos públicas, em ordem |
+| `public_event_photos(slug, session_id, limit, offset)` | id, `session_id`, `thumb_key`, `web_key`, dimensões, `taken_at`; ordem cronológica; `limit` teto 100 |
+| `public_photo(id)` | id, `web_key`, `thumb_key`, slug do evento, nome da sessão; vazio se a foto não é pública |
+
+Nunca `storage_key` (original), `uploaded_by`, `status` ou as flags. Coluna
+nova nesses retornos exige revisão. Os `revoke` citam `anon` e
+`authenticated` pelo nome: o Supabase concede `execute` a eles por default
+privileges em toda função nova de `public`.
+
 ---
 
 ## 6. Worker (Go)
@@ -864,8 +907,9 @@ Cenários pgTAP obrigatórios listados em `CLAUDE.md` seção 8. Não remover.
 Além deles, três guardas estruturais dinâmicos em `010_schema_guards.sql`:
 toda tabela em `public` tem RLS, toda função `security definer` fixa
 `search_path` com `pg_temp`, e nenhuma tabela concede privilégio ao papel
-`anon`. Os três varrem o catálogo, então pegam sozinhos o que for criado nas
-fases seguintes.
+`anon` (continua valendo com as funções `public_*`: elas são função, não
+tabela). Os três varrem o catálogo, então pegam sozinhos o que for criado nas
+fases seguintes. `07_public_events.sql` cobre a leitura pública (§5.5).
 
 CI:
 ```

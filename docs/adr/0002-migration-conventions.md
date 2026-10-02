@@ -26,6 +26,7 @@ the ordinal is the human's.
 | 0004 | `20260911062131_schema_cleanup_pendencias.sql` | `profiles_full_name_not_blank`, índice único normalizado `sessions_event_id_name_key` ([ADR 0008](0008-session-name-uniqueness-normalized.md)), `events_created_by_idx` — fecha as três pendências de `ARQUITETURA.md` §15 |
 | 0005 | `20260911123330_phase4a_faces.sql` | `face_consents`, `photo_grants`, `search_faces`, `read photos` versão final ([ADR 0009](0009-photo-grants-revocation-and-search-faces-hits-cte.md)) |
 | 0006 | `20260914023701_worker_service_role.sql` | role `worker_service` (`login bypassrls`), grants em `photos`/`photo_faces`/`jobs`, `usage` em `public`/`extensions`, membership em `postgres` ([ADR 0011](0011-worker-service-role.md)) |
+| 0007 | `20261002203010_public_events.sql` | `events.is_public` (só admin muda, trigger `trg_events_public_flag`), `public_photos_of()` interna e as funções públicas `public_event`, `public_event_sessions`, `public_event_photos`, `public_photo` ([ADR 0014](0014-public-events.md)) |
 
 New migrations are created with `npx supabase migration new <name>`, never by
 hand-typing a timestamp.

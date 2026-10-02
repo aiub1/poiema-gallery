@@ -1,6 +1,6 @@
 # CONTRATO — galeria-web ↔ galeria-core
 
-Versão 1.1 · **Este arquivo é idêntico nos dois repositórios.**
+Versão 1.2 · **Este arquivo é idêntico nos dois repositórios.**
 Alterou aqui, copie para o outro no mesmo PR.
 
 > ⚠️ O **galeria-web ainda não existe**. Até ele ser criado, este documento vive
@@ -10,6 +10,11 @@ Alterou aqui, copie para o outro no mesmo PR.
 
 > **Mudanças da 1.0 para a 1.1** — perfil provisionado nasce inativo e a web
 > precisa tratar esse estado; geração de tipos dormente; duas invariantes novas.
+
+> **Mudanças da 1.1 para a 1.2** (evento público — ADR
+> `docs/adr/0014-public-events.md` do core) — `events.is_public`; primeira leitura sem
+> login, só pelas funções `public_*`; seção nova §9 (depois das invariantes,
+> para nenhuma referência a "§8" mudar); décima invariante.
 
 ---
 
@@ -166,5 +171,26 @@ exige PR coordenado nos dois repositórios.
 7. `service_role key` nunca chega ao navegador.
 8. Perfil nasce **inativo** e não enxerga nada até ser ativado por um `admin`.
 9. Perfil **nunca é excluído** — nem pelo admin. Desativar é o único caminho.
+10. Foto com `contains_minors` verdadeiro ou nulo nunca é devolvida por função
+    pública.
 
 Quebrar qualquer uma delas é incidente, não bug comum.
+
+---
+
+## 9. Evento público
+
+Um evento com `events.is_public = true` pode ser lido sem login. Só `admin` muda
+`is_public`.
+
+- O papel `anon` não lê tabela nenhuma. A leitura pública usa apenas as funções
+  `public_event`, `public_event_sessions`, `public_event_photos` e `public_photo`.
+- A regra pública vive no core: evento público e não excluído; foto não excluída,
+  publicada, **`contains_minors = false`** e não privada. Foto com menores nunca é
+  pública.
+- A web pública só assina, no R2, chaves de linhas que essas funções devolveram, e só as
+  variantes `web` e `thumb`. O original nunca é entregue ao visitante.
+- Envio e exclusão continuam exigindo login e seguem os §4, §7 e as invariantes.
+- Indexação facial: o site de um evento público pode publicar foto sem menores **sem**
+  enfileirar `index_faces` (linha inserida com `status = 'skipped'`). Visitante de evento
+  aberto não assinou o consentimento biométrico.
