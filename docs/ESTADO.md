@@ -173,7 +173,8 @@ versionados (app `poiema-gallery-workerr`).
   privilégio em tabela. **Escrita e testada localmente; ainda NÃO aplicada no
   remoto** — aplicação por `migrations.yml` com dry-run (ADR 0013). Depois
   dela: criar o evento GetUp 2026 (passo manual no SQL Editor), CORS do
-  bucket para o site do GetUp (PR de `infra/`), regenerar tipos e copiar
+  bucket para o site do GetUp (passo manual, não há código de CORS no
+  `infra/` — ver "Rollout do evento público"), regenerar tipos e copiar
   `CONTRATO.md` 1.2 para o `galeria-web`.
 - 128 testes pgTAP (106 anteriores + 22 de `07_public_events.sql`), passando
   localmente via `npx supabase test db`:
@@ -342,6 +343,114 @@ versionados (app `poiema-gallery-workerr`).
   ambiente — `services/face/` foi validado (`ruff`, `mypy`, `pytest`)
   rodando dentro de um container `python:3.12-slim` via Docker, não em venv
   local.
+
+---
+
+## Rollout do evento público (0007) — pendente, a aplicar pelo João
+
+Situação em 2026-10-02: o `getup-gallery` já está no ar apontando para a
+produção, mas as funções `public_*` não existem no remoto (PostgREST responde
+`PGRST202`; a home dá 500 e `/api/download/<id>` dá 502). A migration
+`20261002203010_public_events.sql` está em `develop` (PR #18) e **não** está em
+`master`. Nada abaixo foi executado contra produção.
+
+### Ramo do workflow
+
+`develop` está 4 commits à frente de `master` (a 0007, o teste, a doc e o merge
+do PR #18); `master` está 2 commits à frente (merges de release #15 e #17, sem
+diferença de conteúdo em relação a `develop`). O `migrations.yml` faz checkout
+do ramo escolhido em "Use workflow from", e o padrão do Actions é o ramo padrão
+do repositório (`master`). Dois caminhos: (a) abrir o PR de release
+`develop` → `master` (procedimento do ADR 0012) e disparar a partir de
+`master`; ou (b) disparar a partir de `develop`, escolhendo o ramo
+explicitamente. Disparar com `master` sem o release **não aplica nada** (a
+0007 não está lá).
+
+### Migrations pendentes
+
+Localmente há sete migrations (0001 a 0007). Quem confere o que o remoto já tem
+é o João: `select version from supabase_migrations.schema_migrations order by 1;`
+Esperado: as seis primeiras presentes e só `20261002203010` ausente. Se faltar
+mais alguma, **parar** e decidir antes de disparar. O SQL que o `db push`
+aplicaria, nesse caso, é exatamente o conteúdo de
+`supabase/migrations/20261002203010_public_events.sql` (coluna `is_public`,
+trigger `trg_events_public_flag`, `public_photos_of`, quatro funções `public_*`,
+`revoke`/`grant`); o dry-run do workflow imprime o mesmo texto no log.
+
+### ⚠️ Pendência: o dry-run não permite abortar
+
+`migrations.yml` roda `supabase db push --dry-run` e, no mesmo job, em seguida
+`supabase db push`, sem pausa. O ADR 0013 supõe que dá para ler o dry-run e
+decidir não prosseguir; na prática o push acontece de qualquer jeito, a menos
+que o dry-run falhe. Correção mínima proposta, não implementada: separar em dois
+jobs, `dry-run` e `apply`, com `apply` declarando `needs: dry-run` e
+`environment: production` — um GitHub Environment com *required reviewers*
+(o João). O revisor lê o log do dry-run e só então aprova o `apply`. A
+alternativa é dois workflows (`migrations-dry-run.yml` e `migrations.yml`),
+sem Environment, com o segundo exigindo ser disparado à mão depois do
+primeiro. O ADR 0013 já registrava o Environment como alternativa descartada
+por exigir configuração fora do repo; este achado muda o balanço e pede um
+ADR novo ou uma emenda ao 0013 quando for implementado.
+
+### Roteiro para aplicar
+
+1. Escolher o ramo (seção acima) e disparar **Actions → Migrations → Run
+   workflow** só depois de ler o dry-run (lembrando que ele não pausa: leia o
+   SQL desta seção antes de clicar).
+2. No SQL Editor do Supabase de produção, conferir:
+   ```sql
+   select version from supabase_migrations.schema_migrations order by 1 desc limit 3;
+   select has_function_privilege('anon','public.public_photos_of(uuid)','execute');  -- false
+   select has_function_privilege('anon','public.public_event(text)','execute');      -- true
+   select has_table_privilege('anon','public.photos','select');                      -- false
+   ```
+3. Rodar o seed do evento, no SQL Editor, como `postgres`, **depois** da
+   migration: `docs/seed-getup-2026.sql` do repositório `getup-gallery` (data
+   `2026-10-02`). Cria `getup-2026`, já público, e as sessões I a V; pode rodar
+   de novo sem duplicar. Conferir: `public_event('getup-2026')` devolve o
+   evento e `public_event_sessions('getup-2026')` as 5 sessões em ordem.
+4. Se o PostgREST ainda responder `PGRST202`: `notify pgrst, 'reload schema';`.
+5. Do lado do visitante, sem escrita: abrir https://getup-gallery.vercel.app/ e
+   ver as abas Sessão I a V.
+
+### CORS do bucket de produção
+
+**Onde é definido hoje:** em lugar nenhum do repositório. `infra/main.tf` só
+declara o `cloudflare_r2_bucket`; o provider fixado (`cloudflare/cloudflare`
+4.52.9) não tem recurso de CORS para R2 (o schema do provider expõe só
+`cloudflare_r2_bucket`, com `account_id`, `location` e `name`). Não existe
+`docs/r2-cors.md` neste repositório (o arquivo citado vive no `galeria-web`).
+Logo, a regra existente foi criada à mão no painel da Cloudflare, e o passo
+abaixo também é manual. Gerenciar CORS como código exigiria subir o provider
+para a série 5 (recurso `cloudflare_r2_bucket_cors`), o que mexe no recurso do
+bucket e no state — decisão para outro PR, não para este.
+
+Estado local do `infra/`: o workspace `default` aponta para o bucket
+`poiema-gallery` (produção) e o workspace `dev` para `poiema-gallery-dev`. Não
+rodei `tofu plan` em nenhum: não há `CLOUDFLARE_API_TOKEN` nem `TF_VAR_*` no
+ambiente, e um plano não mostraria CORS de qualquer forma.
+
+**Passo manual (produção):** Cloudflare → R2 → `poiema-gallery` → Settings →
+CORS policy. **Acrescentar** a regra abaixo às existentes (não substituir a
+política inteira: o painel regrava o JSON todo, e apagar a regra do
+`galeria-web` quebraria o envio de lá):
+
+```json
+{
+  "AllowedOrigins": ["https://getup-gallery.vercel.app"],
+  "AllowedMethods": ["PUT", "GET", "HEAD"],
+  "AllowedHeaders": ["content-type"],
+  "ExposeHeaders": ["ETag"],
+  "MaxAgeSeconds": 3600
+}
+```
+
+**Dev:** no bucket `poiema-gallery-dev` pode-se acrescentar a mesma regra com
+`"http://localhost:3000"` em `AllowedOrigins`. O IP da rede local muda e não
+entra em produção.
+
+Verificação: do navegador, o `PUT` de envio de foto e o download em JPG (que lê
+a URL assinada) deixam de falhar no preflight.
 
 ---
 
