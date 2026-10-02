@@ -12,7 +12,11 @@ Contrato entre os dois: `docs/CONTRATO.md`.
 ## 1. O que é
 
 Backend da galeria **interna e gratuita** de fotos de uma igreja local.
-Conteúdo: **Evento → Sessão → Fotos**. Sistema fechado, sem acesso anônimo.
+Conteúdo: **Evento → Sessão → Fotos**. Sistema fechado: `anon` não tem
+privilégio em **tabela** alguma. Existe uma única exceção de leitura, as
+funções `public_*` de evento marcado `is_public` (só `admin` marca), que nunca
+devolvem foto com `contains_minors` verdadeiro ou nulo — ver
+`docs/adr/0014-public-events.md`.
 
 Sem fins lucrativos, sem cobrança. Fotógrafos são membros voluntários.
 
@@ -164,6 +168,8 @@ papel para nulo e o usuário deixa de enxergar o acervo. Ver §5.1.
   - perfil provisionado a partir de `auth.users` nasce inativo
   - ninguém executa `DELETE` em `profiles`, nem admin
   - `uploader` não edita sessão de evento alheio
+  - `anon` não lê foto com menores de evento público
+  - `uploader` não torna evento público
 - Go: teste de unidade nos jobs, com serviço facial fake.
 - Python: teste de `/embed` garantindo que nada é escrito em disco.
 - CI roda tudo em todo PR. Vermelho não faz merge.

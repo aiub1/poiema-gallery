@@ -1,6 +1,6 @@
 # Estado do projeto
 
-Última atualização: 2026-09-11 · snapshot, não documento vivo como
+Última atualização: 2026-10-02 · snapshot, não documento vivo como
 `ARQUITETURA.md`. Reflete o que existe de fato no branch `develop` mais o
 que está implementado localmente aguardando merge (ver nota de cada fase),
 não o plano — para o plano completo ver `ARQUITETURA.md` §13 (Roadmap).
@@ -165,7 +165,18 @@ versionados (app `poiema-gallery-workerr`).
   são pré-requisitos mecânicos, não ampliam o alcance do role — nota de
   aplicação em [ADR 0011](adr/0011-worker-service-role.md)). Sem senha —
   passo manual, [ADR 0006](adr/0006-supabase-manual-setup.md).
-- 106 testes pgTAP, passando localmente via `npx supabase test db`:
+- Migration `20261002203010_public_events.sql` (0007, branch
+  `feat/public-events`): `events.is_public`, trigger `trg_events_public_flag`
+  (só admin muda), `public_photos_of()` interna e as funções públicas
+  `public_event`, `public_event_sessions`, `public_event_photos`,
+  `public_photo` ([ADR 0014](adr/0014-public-events.md)). `anon` continua sem
+  privilégio em tabela. **Escrita e testada localmente; ainda NÃO aplicada no
+  remoto** — aplicação por `migrations.yml` com dry-run (ADR 0013). Depois
+  dela: criar o evento GetUp 2026 (passo manual no SQL Editor), CORS do
+  bucket para o site do GetUp (PR de `infra/`), regenerar tipos e copiar
+  `CONTRATO.md` 1.2 para o `galeria-web`.
+- 128 testes pgTAP (106 anteriores + 22 de `07_public_events.sql`), passando
+  localmente via `npx supabase test db`:
   - `00_foundation.sql` (25): um cenário por papel (admin/uploader/member/
     perfil inativo/anon), incluindo autopromoção, delete em `profiles`,
     provisionamento inativo e uploader editando sessão alheia. Ajustado na
