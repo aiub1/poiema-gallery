@@ -9,29 +9,34 @@
 -- linha em public.profiles como member/inativo. Por isso ajustamos com
 -- `update`, não `insert` — e o `update` só passa porque este script roda
 -- como `postgres`, isento em enforce_profile_privileged_columns (ADR 0003).
+--
+-- As quatro colunas de token vão com '' (não NULL): o GoTrue lê essas colunas
+-- como string e falha com "converting NULL to string is unsupported", o que
+-- derruba o login (500) no stack local.
 
 insert into auth.users (
   instance_id, id, aud, role, email,
   encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data,
-  created_at, updated_at
+  created_at, updated_at,
+  confirmation_token, recovery_token, email_change, email_change_token_new
 ) values
   ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111',
    'authenticated', 'authenticated', 'admin@poiema.test',
    crypt('devpassword', gen_salt('bf')), now(),
-   '{"provider":"email","providers":["email"]}', '{}', now(), now()),
+   '{"provider":"email","providers":["email"]}', '{}', now(), now(), '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '22222222-2222-2222-2222-222222222222',
    'authenticated', 'authenticated', 'uploader@poiema.test',
    crypt('devpassword', gen_salt('bf')), now(),
-   '{"provider":"email","providers":["email"]}', '{}', now(), now()),
+   '{"provider":"email","providers":["email"]}', '{}', now(), now(), '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333333',
    'authenticated', 'authenticated', 'membro@poiema.test',
    crypt('devpassword', gen_salt('bf')), now(),
-   '{"provider":"email","providers":["email"]}', '{}', now(), now()),
+   '{"provider":"email","providers":["email"]}', '{}', now(), now(), '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '44444444-4444-4444-4444-444444444441',
    'authenticated', 'authenticated', 'desativado@poiema.test',
    crypt('devpassword', gen_salt('bf')), now(),
-   '{"provider":"email","providers":["email"]}', '{}', now(), now());
+   '{"provider":"email","providers":["email"]}', '{}', now(), now(), '', '', '', '');
 
 update public.profiles set full_name = 'Admin da Igreja', role = 'admin', is_active = true
   where id = '11111111-1111-1111-1111-111111111111';
